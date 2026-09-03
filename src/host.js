@@ -29,8 +29,11 @@ const SYSTEM_PROMPT = [
   '3) 如果需要，补充必要的约束、输出格式或上下文信息；',
   '4) 直接输出优化后的提示词正文本身，不要任何解释、前言、后记或代码块围栏；',
   '5) 使用与原文相同的语言；',
-  '6) 无论原文是否包含明确的“请…”式指令，都必须输出一个可用的改写/润色版本；',
-  '7) 严禁返回空内容、占位符（如“…”）或“无法优化/没有内容”之类的回复。',
+  '6) 只在确有改进空间时改写：如果原文已经是明确、具体、可执行、无需实质改进的提示词，直接逐字原样输出原文，不要为改而改；',
+  '7) 如果原文不是提示词任务（例如一段普通陈述、闲聊或无法优化的内容），同样原样输出原文，不要凭空编造指令或内容；',
+  '8) 最小化改动：仅修正真正不清楚、不完整或不具体之处，保留用户的措辞、结构与意图，避免无意义的措辞替换；',
+  '9) 相同输入下请保持输出稳定，不要反复更换说法或结构；',
+  '10) 严禁输出空内容或“无法优化/没有内容”之类的话——原样输出原文是合法的“无改动”结果。',
 ].join('\n')
 
 /** 请求体上限（64 KiB），防止异常客户端撑爆内存。 */
@@ -125,8 +128,14 @@ async function streamOnce(llm, selection, text, maxTokens, temperature, reasonin
 const DEFAULTS = Object.freeze({
   reasoningEffort: 'off',   // 提示词改写不需要深度推理：off 最快且不会耗尽额度
   maxTokens: 1500,          // 关掉思考后足够覆盖一次高质量改写
-  temperature: 0.3,
+  temperature: 0.1,         // 低温 → 结果更稳定、可复现；想要更“有创意”再调高
 })
+
+/** 归一化空白后比较，判断模型是否实质上未改动原文（避免“硬优化”）。 */
+function essentiallySame(optimized, text) {
+  const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim()
+  return norm(optimized) === norm(text)
+}
 
 /**
  * 核心优化逻辑：用选中模型改写文本。
@@ -155,7 +164,14 @@ async function runOptimize(ctx, text, opts) {
       const attempt = attempts[i]
       const r = await streamOnce(llm, selection, text, attempt.maxTokens, temperature, reasoningEffort)
       const optimized = r.out.trim()
-      if (optimized) return { ok: true, text: optimized }
+      if (optimized) {
+        // 模型判断“无需优化”时会把原文原样返回：标记 unchanged，让客户端
+        // 提示用户而不是替换草稿（也避免撤销栈被“无改动”污染）。
+        if (essentiallySame(optimized, text)) {
+          return { ok: true, text: text, unchanged: true }
+        }
+        return { ok: true, text: optimized }
+      }
       if (r.finishKind === 'error' || r.finishKind === 'aborted') {
         const fail = r.finishFailure
         return { ok: false, error: (fail && fail.message) || '模型调用失败' }

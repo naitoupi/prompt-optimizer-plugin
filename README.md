@@ -97,6 +97,7 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 | 版本 | 变更 |
 |------|------|
+| v0.7.6 | 抑制随机与“硬优化”：temperature 默认降到 0.1；系统指令要求最小化改动、同输入输出稳定；模型判定无需优化时原样返回，客户端提示“已是最优”且不替换草稿、不入撤销栈 |
 | v0.7.5 | 提速：默认显式关闭模型思考（reasoningEffort:'off'，提示词改写不需要深度推理），并开放 reasoningEffort/maxTokens/temperature 三项可调参数（profile patch 按 id 覆盖） |
 | v0.7.4 | 修复真实根因（finish=max-tokens 空返回）：模型思考把输出额度耗尽、正文未开始；遇 max-tokens 空返回自动扩容重试一次，失败按真实 finish 原因提示 |
 | v0.7.3 | 错误红字不再单行硬截断：可换行显示（最多 3 行），悬停看全文、点击可手动关闭 |
@@ -112,8 +113,8 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 ## 可调参数（可选）
 
-默认值面向“快”：`reasoningEffort: off`（提示词改写不做深度推理）、
-`maxTokens: 1500`、`temperature: 0.3`。想调整时，在
+默认值面向“快且稳”：`reasoningEffort: off`（提示词改写不做深度推理）、
+`maxTokens: 1500`、`temperature: 0.1`（低温度 → 结果更可复现）。想调整时，在
 `$DSH_HOME/profiles/web/cordis.patch.yml` 里按 id 覆盖本插件行并给出 config
 （覆盖需要重述整行）：
 

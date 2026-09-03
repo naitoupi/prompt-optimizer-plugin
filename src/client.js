@@ -129,23 +129,34 @@ window.__ModuleLoader__.load({
           const draft = useInput((s) => s.draft)
           const [busy, setBusy] = React.useState(false)
           const [err, setErr] = React.useState(null)
+          const [notice, setNotice] = React.useState(null)
           const [undoable, setUndoable] = React.useState(hasHistory(sessionId))
           React.useEffect(() => subscribe(sessionId, () => setUndoable(hasHistory(sessionId))), [sessionId])
-          // 发送（phase 离开 plain）→ 清掉上次失败留下的红字提醒，避免“模型未返回
-          // 有效内容”一直残留在输入工具行旁
-          // (Once the draft enters the submit pipeline the stale error text clears)
+          // 普通提示（如“已是最优，未改动”）几秒后自动消失
+          // (A transient hint such as “already optimal” fades out on its own)
+          React.useEffect(() => {
+            if (!notice) return undefined
+            const timer = setTimeout(() => setNotice(null), 3200)
+            return () => clearTimeout(timer)
+          }, [notice])
+          // 发送（phase 离开 plain）→ 清掉上次失败留下的红字/提示，避免一直残留在工具行旁
+          // (Once the draft enters the submit pipeline stale error/hint text clears)
           const phase = useInput((s) => s.phase)
           React.useEffect(() => {
-            if (phase !== 'plain') setErr(null)
+            if (phase !== 'plain') {
+              setErr(null)
+              setNotice(null)
+            }
           }, [phase])
           // 输入框被清空 → 清空该会话优化历史：撤销按钮与原文参考区一并消失；
-          // 红字提醒也一并消失
+          // 红字/提示也一并消失
           // (Clearing the draft clears the session history, so Undo and the reference
-          // dock both disappear; the stale error text clears too)
+          // dock both disappear; the stale error/hint text clears too)
           React.useEffect(() => {
             if (typeof draft === 'string' && draft.trim() === '') {
               clear(sessionId)
               setErr(null)
+              setNotice(null)
             }
           }, [draft])
           const draftEmpty = !(typeof draft === 'string' && draft.trim().length > 0)
@@ -155,10 +166,16 @@ window.__ModuleLoader__.load({
             if (!canOptimize) return
             setBusy(true)
             setErr(null)
+            setNotice(null)
             try {
               const res = await httpOptimize(draft)
               if (res && typeof res === 'object' && res.ok === true && typeof res.text === 'string' && res.text.trim()) {
-                if (res.text !== draft) {
+                if (res.unchanged === true || res.text === draft) {
+                  // 模型判定无需优化（原文已是最优/无可改内容）：不替换草稿、
+                  // 不入撤销栈，只给一个短暂的普通提示
+                  // (Nothing worth changing: keep the draft, no undo entry, just a hint)
+                  setNotice('无需优化：模型认为原文已是最优，未做改动')
+                } else {
                   // 记录原文；输入框直接替换为优化文，发送即优化文
                   // (Record original; replace draft with the optimized text only, so submit sends the optimized prompt)
                   push(sessionId, draft, res.text)
@@ -196,6 +213,19 @@ window.__ModuleLoader__.load({
                   style: busy ? btnDisabled : btnBase,
                   title: '撤销最近一次优化，恢复原文本',
                 }, '↩ 撤销')
+              : null,
+            notice
+              ? React.createElement('span', {
+                  key: 'notice',
+                  style: {
+                    color: '#8a8f98',
+                    fontSize: '12px',
+                    lineHeight: '1.45',
+                    maxWidth: '300px',
+                    whiteSpace: 'normal',
+                    wordBreak: 'break-word',
+                  },
+                }, notice)
               : null,
             err
               ? React.createElement('span', {
