@@ -1,6 +1,6 @@
 /**
- * Prompt Optimizer — Client half（可安装 dsh bundle 形态，v8）
- * ============================================================
+ * Prompt Optimizer — Client half（可安装 dsh bundle 形态，v11，双语）
+ * ================================================================
  * 由 dsh-client-modules 作为浏览器插件加载：包 manifest 声明 dsh.client 并
  * export ./client，页面通过 /plugins/prompt-optimizer-plugin/client.js 获取。
  *
@@ -9,7 +9,8 @@
  *  - 优化后输入框直接替换为优化文（发送即优化文）
  *  - 原文浮动展示在输入框上方（conversation.input.dock 参考区，只读）
  *  - 展开/收起全部由输入行为自动驱动；清空草稿时撤销按钮与参考区一并消失
- *  - 设置 → 插件 → 提示词优化：启用/停用开关（v8，免重启）
+ *  - 设置 → 插件 → 提示词优化：启用/停用开关 + 生成参数 + 可编辑优化指令
+ *  - 界面文案跟随页面语言（<html lang> / navigator.language）自动切换中/英
  *
  * 通信：不再用动态插件的 host.call，改 fetch Host 的同源路由
  * （静态插件无法新增 ctx.remote 命名空间，见 src/host.js 头注释）。
@@ -33,6 +34,22 @@ window.__ModuleLoader__.load({
     var SET_STATE_URL = '/plugins/prompt-optimizer-plugin/set-state'
     var SETTINGS_URL = '/plugins/prompt-optimizer-plugin/settings'
     var PROMPT_URL = '/plugins/prompt-optimizer-plugin/prompt'
+
+    // ── 界面语言：优先 <html lang>，其次 navigator.language；'en' | 'zh' ──
+    // (UI language: <html lang> first, then navigator.language)
+    function uiLang() {
+      var el = typeof document !== 'undefined' && document.documentElement
+        ? String(document.documentElement.lang || '') : ''
+      if (el.toLowerCase().indexOf('en') === 0) return 'en'
+      if (el.toLowerCase().indexOf('zh') === 0) return 'zh'
+      var nav = typeof navigator !== 'undefined' && navigator.language ? String(navigator.language) : ''
+      return nav.toLowerCase().indexOf('en') === 0 ? 'en' : 'zh'
+    }
+
+    /** 双语文案选择。 */
+    function L(zh, en) {
+      return uiLang() === 'en' ? en : zh
+    }
 
     // ── 插件状态 store（页面内共享，实时联动）──
     // 内容 = Host 的 state 快照：{ enabled, settings: { reasoningEffort, maxTokens, temperature } }
@@ -92,12 +109,12 @@ window.__ModuleLoader__.load({
       return usePluginState().enabled
     }
 
-    /** POST JSON 到 Host 端点并解析返回体（HTTP/网络错误抛出）。 */
+    /** POST JSON 到 Host 端点并解析返回体（自动附带语言标记；HTTP/网络错误抛出）。 */
     function postJson(url, body) {
       return fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(Object.assign({}, body, { lang: uiLang() })),
       }).then(async (res) => {
         var data = null
         try { data = await res.json() } catch (e) { data = null }
@@ -116,7 +133,7 @@ window.__ModuleLoader__.load({
       return fetch(OPTIMIZE_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, lang: uiLang() }),
       }).then(async (res) => {
         var data = null
         try { data = await res.json() } catch (e) { data = null }
@@ -124,13 +141,13 @@ window.__ModuleLoader__.load({
           var msg = data !== null && typeof data.error === 'string' ? data.error : 'HTTP ' + res.status
           throw new Error(msg)
         }
-        if (data === null || typeof data !== 'object') throw new Error('响应格式错误')
+        if (data === null || typeof data !== 'object') throw new Error(L('响应格式错误', 'Malformed response'))
         return data
       })
     }
 
-    // ── 设置 → 插件 → 提示词优化：启用开关 + 生成参数 ──
-    // (Settings → Plugins → Prompt Optimizer tab: on/off switch + generation params)
+    // ── 设置 → 插件 → 提示词优化：启用开关 + 生成参数 + 优化指令 ──
+    // (Settings → Plugins → Prompt Optimizer tab)
     function OptimizerSettingsTab() {
       var snap = usePluginState()
       var enabled = snap.enabled
@@ -159,7 +176,7 @@ window.__ModuleLoader__.load({
       var promptErr = promptErrPair[0]
       var setPromptErr = promptErrPair[1]
 
-      // 默认优化指令展示（懒加载：首次点“显示”才拉取）
+      // 优化指令展示/编辑（懒加载：首次点“展开编辑”才拉取）
       var showPromptPair = React.useState(false)
       var showPrompt = showPromptPair[0]
       var setShowPrompt = showPromptPair[1]
@@ -203,7 +220,7 @@ window.__ModuleLoader__.load({
       function savePrompt() {
         if (promptText === null) { loadPromptOnce(); return }
         if (typeof promptDraft !== 'string' || promptDraft.trim() === '') {
-          setPromptErr('指令内容不能为空')
+          setPromptErr(L('指令内容不能为空', 'The instruction must not be empty'))
           return
         }
         return runTask(function () {
@@ -211,7 +228,7 @@ window.__ModuleLoader__.load({
             setPromptText(d.prompt)
             setPromptDraft(d.prompt)
             setPromptIsCustom(d.isCustom === true)
-            setPromptMsg('优化指令已保存并即时生效')
+            setPromptMsg(L('优化指令已保存并即时生效', 'Instruction saved and applied instantly'))
             return d
           })
         }, setPromptMsg, setPromptErr)
@@ -224,7 +241,7 @@ window.__ModuleLoader__.load({
             setPromptText(d.prompt)
             setPromptDraft(d.prompt)
             setPromptIsCustom(false)
-            setPromptMsg('已恢复默认优化指令')
+            setPromptMsg(L('已恢复默认优化指令', 'Restored the built-in default instruction'))
             return d
           })
         }, setPromptMsg, setPromptErr)
@@ -232,10 +249,10 @@ window.__ModuleLoader__.load({
 
       function copyPrompt() {
         if (typeof promptText !== 'string' || promptText === '') return
-        function fallback() { setCopyMsg('复制失败') }
+        function fallback() { setCopyMsg(L('复制失败', 'Copy failed')) }
         if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
           navigator.clipboard.writeText(promptText).then(function () {
-            setCopyMsg('已复制')
+            setCopyMsg(L('已复制', 'Copied'))
             setTimeout(function () { setCopyMsg('') }, 2000)
           }).catch(fallback)
         } else {
@@ -276,7 +293,9 @@ window.__ModuleLoader__.load({
         return runTask(function () {
           return postJson(SET_STATE_URL, { enabled: !enabled }).then(function (d) {
             applyRemoteState(d)
-            setToggleMsg('已生效（无需重启）：' + (d.enabled === true ? '✨ 优化已恢复' : '✨ 优化已关闭，聊天输入框中的按钮将隐藏'))
+            setToggleMsg(L(
+              '已生效（无需重启）：' + (d.enabled === true ? '✨ 优化已恢复' : '✨ 优化已关闭，聊天输入框中的按钮将隐藏'),
+              'Applied instantly (no restart): ' + (d.enabled === true ? '✨ optimization restored' : '✨ optimization disabled; the composer buttons will hide')))
             return d
           })
         }, setToggleMsg, setToggleErr)
@@ -286,17 +305,17 @@ window.__ModuleLoader__.load({
         var tokens = parseInt(tokensStr, 10)
         var temp = parseFloat(tempStr)
         if (!Number.isFinite(tokens) || tokens < 64) {
-          setParamsErr('最大输出 tokens 需为 ≥64 的整数')
+          setParamsErr(L('最大输出 tokens 需为 ≥64 的整数', 'Max output tokens must be an integer ≥ 64'))
           return
         }
         if (!Number.isFinite(temp) || temp < 0 || temp > 2) {
-          setParamsErr('温度需在 0 ~ 2 之间')
+          setParamsErr(L('温度需在 0 ~ 2 之间', 'Temperature must be between 0 and 2'))
           return
         }
         return runTask(function () {
           return postJson(SETTINGS_URL, { reasoningEffort: effort, maxTokens: tokens, temperature: temp }).then(function (d) {
             applyRemoteState(d)
-            setParamsMsg('生成参数已保存并立即生效')
+            setParamsMsg(L('生成参数已保存并立即生效', 'Generation parameters saved and applied instantly'))
             return d
           })
         }, setParamsMsg, setParamsErr)
@@ -306,7 +325,9 @@ window.__ModuleLoader__.load({
         return runTask(function () {
           return postJson(SETTINGS_URL, { reset: true }).then(function (d) {
             applyRemoteState(d)
-            setParamsMsg('已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1）')
+            setParamsMsg(L(
+              '已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1）',
+              'Restored default parameters (reasoning off / maxTokens 1500 / temperature 0.1)'))
             return d
           })
         }, setParamsMsg, setParamsErr)
@@ -327,16 +348,17 @@ window.__ModuleLoader__.load({
       var fieldHint = { display: 'block', fontSize: '11px', opacity: 0.6, marginTop: '4px', lineHeight: '1.5' }
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', padding: '4px 2px', maxWidth: '760px' } },
-        h('div', { style: { fontWeight: 600, fontSize: '14px' } }, 'Prompt Optimizer（提示词优化）'),
+        h('div', { style: { fontWeight: 600, fontSize: '14px' } }, L('Prompt Optimizer（提示词优化）', 'Prompt Optimizer')),
         h('div', { style: { fontSize: '12px', lineHeight: '1.7', opacity: 0.85 } },
-          '在对话输入框工具行提供 ✨ 优化：用当前模型把草稿改写为更清晰、更具体的提示词，支持 ↩ 一键撤销、原文浮动参考。',
-          h('div', {}, '当前状态：' + (enabled ? '✅ 已启用' : '⏸ 已停用')),
-          h('div', {}, '停用后：输入框不再显示优化按钮，也不会发起任何模型调用。')),
+          L('在对话输入框工具行提供 ✨ 优化：用当前模型把草稿改写为更清晰、更具体的提示词，支持 ↩ 一键撤销、原文浮动参考。',
+            'Adds ✨ Optimize to the composer toolbar: rewrites your draft into a clearer, more specific prompt with the current model; ↩ undo and a floating original-text reference are included.'),
+          h('div', {}, L('当前状态：' + (enabled ? '✅ 已启用' : '⏸ 已停用'), 'Current status: ' + (enabled ? '✅ Enabled' : '⏸ Disabled'))),
+          h('div', {}, L('停用后：输入框不再显示优化按钮，也不会发起任何模型调用。', 'When disabled, the optimize button disappears and no model call is made.'))),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
           h('button', {
             type: 'button', disabled: busy, onClick: flip,
             style: busy ? { ...rowStyle, opacity: 0.55, cursor: 'wait' } : rowStyle,
-          }, busy ? '处理中…' : (enabled ? '停用插件' : '启用插件'))),
+          }, busy ? L('处理中…', 'Working…') : (enabled ? L('停用插件', 'Disable plugin') : L('启用插件', 'Enable plugin')))),
         toggleMsg
           ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } }, toggleMsg)
           : null,
@@ -347,52 +369,50 @@ window.__ModuleLoader__.load({
         h('div', {
           style: { borderTop: '1px solid rgba(128,128,128,0.25)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '12px' },
         },
-          h('div', { style: { fontWeight: 600, fontSize: '13px' } }, '生成参数（点击优化时生效）'),
+          h('div', { style: { fontWeight: 600, fontSize: '13px' } }, L('生成参数（点击优化时生效）', 'Generation parameters (used when optimizing)')),
           h('div', {},
-            h('label', { style: fieldLabel }, '思考强度（reasoningEffort）'),
+            h('label', { style: fieldLabel }, L('思考强度（reasoningEffort）', 'Reasoning effort')),
             // colorScheme:'dark' 让原生下拉弹窗按深色渲染；option 显式给出
             // 深底亮字，避免深色主题下选项近乎白底白字"看不见"的 bug
-            // (dark color-scheme plus explicit option colors keep the native
-            // dropdown readable on dark themes)
             h('select', {
               value: effort,
               onChange: function (e) { setEffort(e.target.value) },
               style: { ...inputStyle, cursor: 'pointer', colorScheme: 'dark' },
             },
-              h('option', { value: 'off', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, 'off — 关闭思考（最快，推荐）'),
-              h('option', { value: 'low', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, 'low — 轻度思考'),
-              h('option', { value: 'high', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, 'high — 深度思考（更慢）'),
-              h('option', { value: 'max', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, 'max — 最强思考（最慢）'),
+              h('option', { value: 'off', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, L('off — 关闭思考（最快，推荐）', 'off — no reasoning (fastest, recommended)')),
+              h('option', { value: 'low', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, L('low — 轻度思考', 'low — light reasoning')),
+              h('option', { value: 'high', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, L('high — 深度思考（更慢）', 'high — deep reasoning (slower)')),
+              h('option', { value: 'max', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, L('max — 最强思考（最慢）', 'max — strongest reasoning (slowest)')),
             ),
-            h('span', { style: fieldHint }, '提示词改写通常不需要深度推理；off 速度快、额度不会被思考耗尽。'),
+            h('span', { style: fieldHint }, L('提示词改写通常不需要深度推理；off 速度快、额度不会被思考耗尽。', 'Prompt rewriting usually needs no deep reasoning; off is fast and won\u2019t exhaust the token budget on thinking.')),
           ),
           h('div', {},
-            h('label', { style: fieldLabel }, '最大输出 tokens'),
+            h('label', { style: fieldLabel }, L('最大输出 tokens', 'Max output tokens')),
             h('input', {
               type: 'number', min: 64, step: 64, value: tokensStr,
               onChange: function (e) { setTokensStr(e.target.value) },
               style: inputStyle,
             }),
-            h('span', { style: fieldHint }, '单次改写允许生成的最大 token 数（≥64）。'),
+            h('span', { style: fieldHint }, L('单次改写允许生成的最大 token 数（≥64）。', 'Maximum tokens allowed for one rewrite (≥ 64).')),
           ),
           h('div', {},
-            h('label', { style: fieldLabel }, '温度（temperature，0 ~ 2）'),
+            h('label', { style: fieldLabel }, L('温度（temperature，0 ~ 2）', 'Temperature (0 ~ 2)')),
             h('input', {
               type: 'number', min: 0, max: 2, step: 0.05, value: tempStr,
               onChange: function (e) { setTempStr(e.target.value) },
               style: inputStyle,
             }),
-            h('span', { style: fieldHint }, '越低越稳定可复现（默认 0.1）；想要更多样化可调高。'),
+            h('span', { style: fieldHint }, L('越低越稳定可复现（默认 0.1）；想要更多样化可调高。', 'Lower is more stable and reproducible (default 0.1); raise it for more variety.')),
           ),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginTop: '2px' } },
             h('button', {
               type: 'button', disabled: busy, onClick: saveSettings,
               style: { ...rowStyle, borderColor: 'rgba(96,125,255,0.65)', color: 'inherit' },
-            }, busy ? '保存中…' : '保存参数'),
+            }, busy ? L('保存中…', 'Saving…') : L('保存参数', 'Save parameters')),
             h('button', {
               type: 'button', disabled: busy, onClick: resetSettings,
               style: rowStyle,
-            }, '恢复默认'),
+            }, L('恢复默认', 'Reset to default')),
           ),
           paramsMsg
             ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } }, paramsMsg)
@@ -405,15 +425,16 @@ window.__ModuleLoader__.load({
         h('div', {
           style: { borderTop: '1px solid rgba(128,128,128,0.25)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' },
         },
-          h('div', { style: { fontWeight: 600, fontSize: '13px' } }, '优化指令（system prompt，可编辑）'),
+          h('div', { style: { fontWeight: 600, fontSize: '13px' } }, L('优化指令（system prompt，可编辑）', 'Instruction (system prompt, editable)')),
           h('div', { style: { fontSize: '12px', lineHeight: '1.7', opacity: 0.85 } },
-            '点击 ✨ 优化时模型收到的指令。当前使用：' + (promptIsCustom ? '自定义版本' : '内置默认版'),
-            h('div', {}, '保存后立即生效；「恢复默认」即回到内置的标准优化指令。')),
+            L('点击 ✨ 优化时模型收到的指令。当前使用：' + (promptIsCustom ? '自定义版本' : '内置默认版'),
+              'The instruction the model receives when you click ✨. Currently using: ' + (promptIsCustom ? 'custom version' : 'built-in default')),
+            h('div', {}, L('保存后立即生效；「恢复默认」即回到内置的标准优化指令。', 'Saving applies instantly; “Reset to default” restores the built-in standard instruction.'))),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
             h('button', { type: 'button', onClick: togglePrompt, style: rowStyle },
-              showPrompt ? '收起' : '展开编辑'),
+              showPrompt ? L('收起', 'Collapse') : L('展开编辑', 'Edit')),
             promptText !== null
-              ? h('button', { type: 'button', onClick: copyPrompt, style: rowStyle }, '复制')
+              ? h('button', { type: 'button', onClick: copyPrompt, style: rowStyle }, L('复制', 'Copy'))
               : null,
             copyMsg
               ? h('span', { style: { color: '#3f9e5f', fontSize: '12px' } }, copyMsg)
@@ -438,8 +459,8 @@ window.__ModuleLoader__.load({
                   h('button', {
                     type: 'button', disabled: busy, onClick: savePrompt,
                     style: { ...rowStyle, borderColor: 'rgba(96,125,255,0.65)', color: 'inherit' },
-                  }, busy ? '保存中…' : '保存指令'),
-                  h('button', { type: 'button', disabled: busy, onClick: resetPrompt, style: rowStyle }, '恢复默认指令'),
+                  }, busy ? L('保存中…', 'Saving…') : L('保存指令', 'Save instruction')),
+                  h('button', { type: 'button', disabled: busy, onClick: resetPrompt, style: rowStyle }, L('恢复默认指令', 'Reset to default')),
                 ),
                 promptMsg
                   ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } }, promptMsg)
@@ -579,14 +600,14 @@ window.__ModuleLoader__.load({
               if (res && typeof res === 'object' && res.ok === true && typeof res.text === 'string' && res.text.trim()) {
                 if (res.unchanged === true || res.text === draft) {
                   // 模型判定无需优化：不替换草稿、不入撤销栈，只给短暂提示
-                  setNotice('无需优化：模型认为原文已是最优，未做改动')
+                  setNotice(L('无需优化：模型认为原文已是最优，未做改动', 'Already optimal: the model considered the original unchanged'))
                 } else {
                   // 记录原文；输入框直接替换为优化文，发送即优化文
                   push(sessionId, draft, res.text)
                   inputActions.setDraft(res.text)
                 }
               } else {
-                setErr((res && res.error) || '优化失败')
+                setErr((res && res.error) || L('优化失败', 'Optimization failed'))
               }
             } catch (e) {
               setErr(String((e && e.message) || e))
@@ -603,8 +624,9 @@ window.__ModuleLoader__.load({
               onClick: onOptimize,
               disabled: !canOptimize,
               style: canOptimize ? btnBase : btnDisabled,
-              title: '调用当前模型优化输入框中的文本，输入框替换为优化后的提示词，原文浮动展示在输入框上方',
-            }, busy ? '优化中…' : '✨ 优化'),
+              title: L('调用当前模型优化输入框中的文本，输入框替换为优化后的提示词，原文浮动展示在输入框上方',
+                'Rewrite the composer draft with the current model; the draft becomes the optimized prompt and the original floats above the composer'),
+            }, busy ? L('优化中…', 'Optimizing…') : '✨ 优化'),
             showUndo
               ? h('button', {
                   key: 'undo',
@@ -612,7 +634,7 @@ window.__ModuleLoader__.load({
                   onClick: onUndo,
                   disabled: busy,
                   style: busy ? btnDisabled : btnBase,
-                  title: '撤销最近一次优化，恢复原文本',
+                  title: L('撤销最近一次优化，恢复原文本', 'Undo the last optimization and restore the original text'),
                 }, '↩ 撤销')
               : null,
             notice
@@ -627,7 +649,7 @@ window.__ModuleLoader__.load({
             err
               ? h('span', {
                   key: 'err',
-                  title: err + '（点击可关闭此提示）',
+                  title: err + L('（点击可关闭此提示）', ' (click to dismiss)'),
                   onClick: () => setErr(null),
                   style: {
                     color: '#e5484d', fontSize: '12px', lineHeight: '1.45',
@@ -682,7 +704,9 @@ window.__ModuleLoader__.load({
             },
           },
             h('div', { key: 'head', style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-              h('span', { style: { fontWeight: 600, fontSize: '12px', opacity: 0.9 } }, '📋 原文（优化前的输入框内容，仅作参考，不会随消息发送）'),
+              h('span', { style: { fontWeight: 600, fontSize: '12px', opacity: 0.9 } },
+                L('📋 原文（优化前的输入框内容，仅作参考，不会随消息发送）',
+                  '📋 Original (your text before optimizing; reference only — never sent with the message)')),
             ),
             h('div', { key: 'body', style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '1.5', opacity: 0.75 } }, entry.original),
           )
@@ -692,7 +716,7 @@ window.__ModuleLoader__.load({
       // ── 设置 → 插件 → 提示词优化：开关 Tab ──
       // (Settings → Plugins → Prompt Optimizer tab)
       slots.inject('settings.plugins.tab', () => slots.register(
-        { name: 'settings.plugins.tab', id: 'prompt-optimizer', order: 30, label: () => '提示词优化' },
+        { name: 'settings.plugins.tab', id: 'prompt-optimizer', order: 30, label: () => L('提示词优化', 'Prompt Optimizer') },
         OptimizerSettingsTab,
       ))
     }

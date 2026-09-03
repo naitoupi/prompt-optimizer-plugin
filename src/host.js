@@ -107,22 +107,32 @@ function normalizePrompt(value) {
   return value
 }
 
-/** 提示词优化专用 system 指令：要求模型直接输出优化后的提示词正文，不做任何解释。 */
+/** 内置优化指令模板（默认原典版，英文；设置页可用「恢复默认指令」回到本版）。 */
 const SYSTEM_PROMPT = [
-  '你是一位专业的提示词（Prompt）优化专家。',
-  '用户会给你一段原始提示词输入，请把它改写成一个更清晰、更具体、更有效的提示词。',
-  '要求：',
-  '1) 完整保留原意的所有要点，不丢失信息；',
-  '2) 让指令更明确、目标更具体，可使用列表、分步骤等结构化表达；',
-  '3) 如果需要，补充必要的约束、输出格式或上下文信息；',
-  '4) 直接输出优化后的提示词正文本身，不要任何解释、前言、后记或代码块围栏；',
-  '5) 使用与原文相同的语言；',
-  '6) 只在确有改进空间时改写：如果原文已经是明确、具体、可执行、无需实质改进的提示词，直接逐字原样输出原文，不要为改而改；',
-  '7) 如果原文不是提示词任务（例如一段普通陈述、闲聊或无法优化的内容），同样原样输出原文，不要凭空编造指令或内容；',
-  '8) 最小化改动：仅修正真正不清楚、不完整或不具体之处，保留用户的措辞、结构与意图，避免无意义的措辞替换；',
-  '9) 相同输入下请保持输出稳定，不要反复更换说法或结构；',
-  '10) 严禁输出空内容或“无法优化/没有内容”之类的话——原样输出原文是合法的“无改动”结果。',
+  'You are a professional prompt-optimization expert.',
+  'You will be given an original prompt. Rewrite it into a clearer, more specific, and more effective prompt.',
+  'Requirements:',
+  '1) Preserve every point of the original meaning; do not lose information;',
+  '2) Make the instructions clearer and the goals more specific; use lists, steps, or other structured formats when helpful;',
+  '3) Add necessary constraints, output format, or context when needed;',
+  '4) Output only the optimized prompt text itself—no explanations, prefaces, afterwords, or code fences;',
+  '5) Use the same language as the original text;',
+  '6) Only rewrite when there is real room for improvement: if the original is already a clear, specific, actionable prompt with nothing substantive to fix, return it verbatim; do not change things just for the sake of changing;',
+  '7) If the original is not a prompt task (for example ordinary prose or casual content that cannot be improved), return it verbatim; do not invent instructions or content;',
+  '8) Minimize changes: fix only genuine unclarity, incompleteness, or vagueness; keep the user\'s wording, structure, and intent; avoid pointless rewording;',
+  '9) For identical input, keep the output stable; do not keep switching phrasing or structure;',
+  '10) Never output empty content or replies like “cannot optimize/no content”—returning the original verbatim is a valid “no change” result.',
 ].join('\n')
+
+/** 按请求语言（'en' | 'zh'）选择提示文案。 */
+function pick(lang, zh, en) {
+  return lang === 'en' ? en : zh
+}
+
+/** 从请求体提取语言标记（缺省中文）。 */
+function langOf(payload) {
+  return payload !== null && typeof payload === 'object' && payload.lang === 'en' ? 'en' : 'zh'
+}
 
 /** 请求体上限（64 KiB），防止异常客户端撑爆内存。 */
 const MAX_BODY_BYTES = 64 * 1024
@@ -230,14 +240,14 @@ function essentiallySame(optimized, text) {
  * 用可配置的推理强度/额度/温度执行；遇 finish=max-tokens 空返回时自动扩容
  * 重试一次；最终失败按真实 finish 原因给出可操作提示。
  */
-async function runOptimize(ctx, text, opts, systemPrompt) {
+async function runOptimize(ctx, text, opts, systemPrompt, lang) {
   const llm = ctx.get('llm')
   if (llm === undefined || typeof llm.stream !== 'function') {
-    return { ok: false, error: 'LLM 服务不可用' }
+    return { ok: false, error: pick(lang, 'LLM 服务不可用', 'LLM service is unavailable') }
   }
   const selection = defaultModelOf(ctx)
   if (selection === null) {
-    return { ok: false, error: '无法确定当前模型' }
+    return { ok: false, error: pick(lang, '无法确定当前模型', 'Unable to determine the current model') }
   }
   const reasoningEffort = opts.reasoningEffort
   const maxTokens = opts.maxTokens
@@ -262,29 +272,37 @@ async function runOptimize(ctx, text, opts, systemPrompt) {
       }
       if (r.finishKind === 'error' || r.finishKind === 'aborted') {
         const fail = r.finishFailure
-        return { ok: false, error: (fail && fail.message) || '模型调用失败' }
+        return { ok: false, error: (fail && fail.message) || pick(lang, '模型调用失败', 'Model call failed') }
       }
       if (r.finishKind === 'max-tokens' && i < attempts.length - 1) {
         // 额度耗尽且零正文：扩容重试
         continue
       }
       // 最终失败：按真实原因给提示
-      const modelTag = `（模型：${selection.provider}/${selection.model}，reasoningEffort=${reasoningEffort ?? 'unset'}，finish=${r.finishKind ?? 'unknown'}）`
+      const modelTag = pick(lang,
+        `（模型：${selection.provider}/${selection.model}，reasoningEffort=${reasoningEffort ?? 'unset'}，finish=${r.finishKind ?? 'unknown'}）`,
+        `(model: ${selection.provider}/${selection.model}, reasoningEffort=${reasoningEffort ?? 'unset'}, finish=${r.finishKind ?? 'unknown'})`)
       if (r.finishKind === 'max-tokens') {
         return {
           ok: false,
-          error: '模型在输出正文前耗尽了输出额度（finish=max-tokens'
-            + (r.reasoning.trim() ? `，本次思考约 ${r.reasoning.length} 字符` : '')
-            + '）。已自动扩容重试仍失败：请在 profile patch 中把 reasoningEffort 调高（low/high）或继续增大 maxTokens。' + modelTag,
+          error: pick(lang,
+            '模型在输出正文前耗尽了输出额度（finish=max-tokens'
+              + (r.reasoning.trim() ? `，本次思考约 ${r.reasoning.length} 字符` : '')
+              + '）。已自动扩容重试仍失败：请在设置中把思考强度调高（low/high）或增大 maxTokens。' + modelTag,
+            'The model exhausted its output budget before producing text (finish=max-tokens'
+              + (r.reasoning.trim() ? `, ~${r.reasoning.length} characters spent on reasoning` : '')
+              + '). An automatic retry with a larger budget still failed: raise the reasoning effort (low/high) or increase maxTokens in Settings. ' + modelTag),
         }
       }
       // finish=stop（或未知）且零正文：无指令/无任务类草稿
       return {
         ok: false,
-        error: '模型未返回有效内容：这段草稿缺少可执行的指令或目标（如“请帮我…”“改写成…”）。请在草稿中补充任务要求后重试，或把光标移到其他草稿上再点优化。' + modelTag,
+        error: pick(lang,
+          '模型未返回有效内容：这段草稿缺少可执行的指令或目标（如“请帮我…”“改写成…”）。请在草稿中补充任务要求后重试。' + modelTag,
+          'The model returned no usable content: this draft lacks an actionable instruction or goal (e.g. “Please help me to…”, “Rewrite it as…”). Add a clear task to the draft and try again. ' + modelTag),
       }
     }
-    return { ok: false, error: '模型未返回有效内容' }
+    return { ok: false, error: pick(lang, '模型未返回有效内容', 'The model returned no usable content') }
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) }
   }
@@ -344,17 +362,21 @@ export function apply(ctx, config) {
       path: OPTIMIZE_PATH,
       handler: async (req, res) => {
         try {
+          const payload = await readJsonBody(req)
+          const lang = langOf(payload)
           if (!enabledOf()) {
-            sendJson(res, 200, { ok: false, error: '插件已停用：请到 设置 → 插件 → 提示词优化 开启后再试' })
+            sendJson(res, 200, {
+              ok: false,
+              error: pick(lang, '插件已停用：请到 设置 → 插件 → 提示词优化 开启后再试', 'Plugin is disabled: enable it under Settings → Plugins → Prompt Optimizer first'),
+            })
             return
           }
-          const payload = await readJsonBody(req)
           const text = payload !== null && typeof payload.text === 'string' ? payload.text : ''
           if (!text.trim()) {
-            sendJson(res, 400, { ok: false, error: '输入为空' })
+            sendJson(res, 400, { ok: false, error: pick(lang, '输入为空', 'Input is empty') })
             return
           }
-          const result = await runOptimize(ctx, text, effectiveOf(), promptOf())
+          const result = await runOptimize(ctx, text, effectiveOf(), promptOf(), lang)
           // 业务失败仍以 200 应答：客户端按 { ok: false, error } 展示原因，
           // 避免把可读错误混入 fetch 的 HTTP 异常分支。
           sendJson(res, 200, result)
@@ -398,7 +420,7 @@ export function apply(ctx, config) {
       handler: async (req, res) => {
         try {
           if (req.method !== 'GET' && req.method !== 'POST') {
-            sendJson(res, 405, { ok: false, error: '方法不支持' })
+            sendJson(res, 405, { ok: false, error: '方法不支持 / Method not supported' })
             return
           }
           if (req.method === 'GET') {
@@ -406,7 +428,8 @@ export function apply(ctx, config) {
             return
           }
           const payload = await readJsonBody(req)
-          if (payload === null) throw new Error('请求体格式错误')
+          const lang = langOf(payload)
+          if (payload === null) throw new Error(pick(lang, '请求体格式错误', 'Invalid request body'))
           if (payload.reset === true) {
             delete state.prompt
             saveState(enabledOf(), effectiveOf(), state.prompt)
@@ -414,7 +437,7 @@ export function apply(ctx, config) {
             return
           }
           const next = normalizePrompt(payload.prompt)
-          if (next === null) throw new Error('指令内容不能为空（最多 32 KiB）')
+          if (next === null) throw new Error(pick(lang, '指令内容不能为空（最多 32 KiB）', 'The instruction must not be empty (max 32 KiB)'))
           if (next === SYSTEM_PROMPT) {
             // 与内置默认完全相同 → 视为未自定义：清掉覆盖，保持“默认版”状态
             // （修复：恢复默认后即使再点“保存指令”，也不该变成“自定义版本”）
@@ -440,7 +463,8 @@ export function apply(ctx, config) {
       handler: async (req, res) => {
         try {
           const payload = await readJsonBody(req)
-          if (payload === null) throw new Error('请求体格式错误')
+          const lang = langOf(payload)
+          if (payload === null) throw new Error(pick(lang, '请求体格式错误', 'Invalid request body'))
           if (payload.reset === true) {
             delete state.reasoningEffort
             delete state.maxTokens
