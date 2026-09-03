@@ -80,8 +80,13 @@ function defaultModelOf(ctx) {
   return null
 }
 
-/** 单次流式改写：累加正文与思考文本，记录 finish 原因。 */
-async function streamOnce(llm, selection, text, maxTokens) {
+/**
+ * 单次流式改写：累加正文与思考文本，记录 finish 原因。
+ * reasoningEffort 显式传给适配器（'off' | 'low' | 'high' | 'max'）：
+ * 提示词改写是聚焦重写任务，不需要深度推理；不传会让 API 侧自行深思考，
+ * 既慢又会把输出额度吃光（finish=max-tokens、零正文）。默认关掉思考。
+ */
+async function streamOnce(llm, selection, text, maxTokens, temperature, reasoningEffort) {
   let out = ''
   let reasoning = ''
   let finishKind = null
@@ -90,7 +95,8 @@ async function streamOnce(llm, selection, text, maxTokens) {
     provider: selection.provider,
     model: selection.model,
     maxTokens,
-    temperature: 0.3,
+    temperature,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     system: SYSTEM_PROMPT,
     messages: [{
       id: 'prompt-opt-' + Math.random().toString(36).slice(2),
@@ -115,17 +121,19 @@ async function streamOnce(llm, selection, text, maxTokens) {
   return { out, reasoning, finishKind, finishFailure }
 }
 
+/** 可配置项的默认值；可用 profile patch 按 id 覆盖（见 README）。 */
+const DEFAULTS = Object.freeze({
+  reasoningEffort: 'off',   // 提示词改写不需要深度推理：off 最快且不会耗尽额度
+  maxTokens: 1500,          // 关掉思考后足够覆盖一次高质量改写
+  temperature: 0.3,
+})
+
 /**
  * 核心优化逻辑：用选中模型改写文本。
- * 实测发现两类“空返回”：
- *  1) finish=max-tokens 且零正文 —— 模型把输出额度全花在思考/非正文产出上
- *     （deepseek 系会把思考计入输出 token），额度耗尽前正文还没开始；
- *  2) finish=stop 且零正文 —— 草稿只是陈述、缺少可执行的“请…”指令时，
- *     模型选择不产出。
- * 处理：max-tokens 空返回自动扩容重试一次；最终失败按真实 finish 原因给出
- * 可操作的提示（不再笼统报“未返回有效内容”）。
+ * 用可配置的推理强度/额度/温度执行；遇 finish=max-tokens 空返回时自动扩容
+ * 重试一次；最终失败按真实 finish 原因给出可操作提示。
  */
-async function runOptimize(ctx, text) {
+async function runOptimize(ctx, text, opts) {
   const llm = ctx.get('llm')
   if (llm === undefined || typeof llm.stream !== 'function') {
     return { ok: false, error: 'LLM 服务不可用' }
@@ -134,15 +142,18 @@ async function runOptimize(ctx, text) {
   if (selection === null) {
     return { ok: false, error: '无法确定当前模型' }
   }
+  const reasoningEffort = opts.reasoningEffort
+  const maxTokens = opts.maxTokens
+  const temperature = opts.temperature
   try {
-    // 首轮额度放大到 2048（思考占用常见）；max-tokens 空返回时第二轮 8192。
+    // 首轮用配置额度；max-tokens 空返回时第二轮扩容重试（兜底）。
     const attempts = [
-      { maxTokens: 2048 },
-      { maxTokens: 8192 },
+      { maxTokens },
+      { maxTokens: Math.max(maxTokens * 4, 8192) },
     ]
     for (let i = 0; i < attempts.length; i++) {
       const attempt = attempts[i]
-      const r = await streamOnce(llm, selection, text, attempt.maxTokens)
+      const r = await streamOnce(llm, selection, text, attempt.maxTokens, temperature, reasoningEffort)
       const optimized = r.out.trim()
       if (optimized) return { ok: true, text: optimized }
       if (r.finishKind === 'error' || r.finishKind === 'aborted') {
@@ -150,17 +161,17 @@ async function runOptimize(ctx, text) {
         return { ok: false, error: (fail && fail.message) || '模型调用失败' }
       }
       if (r.finishKind === 'max-tokens' && i < attempts.length - 1) {
-        // 额度耗尽且零正文：扩容重试（模型思考吃掉了全部输出额度）
+        // 额度耗尽且零正文：扩容重试
         continue
       }
       // 最终失败：按真实原因给提示
-      const modelTag = `（模型：${selection.provider}/${selection.model}，finish=${r.finishKind ?? 'unknown'}）`
+      const modelTag = `（模型：${selection.provider}/${selection.model}，reasoningEffort=${reasoningEffort ?? 'unset'}，finish=${r.finishKind ?? 'unknown'}）`
       if (r.finishKind === 'max-tokens') {
         return {
           ok: false,
-          error: '模型把输出额度全花在了思考上、没来得及输出正文（finish=max-tokens'
+          error: '模型在输出正文前耗尽了输出额度（finish=max-tokens'
             + (r.reasoning.trim() ? `，本次思考约 ${r.reasoning.length} 字符` : '')
-            + '）。已自动扩容到 8192 重试仍失败：请把草稿改成含明确任务的提示词（“请帮我…”“改写成…”）后再试。' + modelTag,
+            + '）。已自动扩容重试仍失败：请在 profile patch 中把 reasoningEffort 调高（low/high）或继续增大 maxTokens。' + modelTag,
         }
       }
       // finish=stop（或未知）且零正文：无指令/无任务类草稿
@@ -184,7 +195,25 @@ export const name = 'prompt-optimizer-plugin'
  */
 export const inject = ['webServer']
 
-export function apply(ctx) {
+/**
+ * 插件配置（可选，loader 传入 apply 的第二参）。当前运行形态默认全部使用
+ * DEFAULTS；想调整可在 profile 的 cordis.patch.yml 里按 id 覆盖本行并给
+ * config（见 README「可调参数」）。字段做宽松校验，非法时回退默认值。
+ */
+function resolveConfig(config) {
+  const cfg = config !== null && typeof config === 'object' ? config : {}
+  const reasoningEffort = cfg.reasoningEffort === 'low' || cfg.reasoningEffort === 'high'
+    || cfg.reasoningEffort === 'max' || cfg.reasoningEffort === 'off'
+    ? cfg.reasoningEffort : DEFAULTS.reasoningEffort
+  const maxTokens = Number.isSafeInteger(cfg.maxTokens) && cfg.maxTokens >= 64
+    ? cfg.maxTokens : DEFAULTS.maxTokens
+  const temperature = typeof cfg.temperature === 'number' && cfg.temperature >= 0 && cfg.temperature <= 2
+    ? cfg.temperature : DEFAULTS.temperature
+  return { reasoningEffort, maxTokens, temperature }
+}
+
+export function apply(ctx, config) {
+  const opts = resolveConfig(config)
   // 双保险：module 级 inject 之外再用 ctx.inject 等一次，保证注册发生在
   // webServer 服务可用之后（ctx.inject 在服务已就绪时同步执行）。
   ctx.inject(['webServer'], (web) => {
@@ -202,7 +231,7 @@ export function apply(ctx) {
             sendJson(res, 400, { ok: false, error: '输入为空' })
             return
           }
-          const result = await runOptimize(ctx, text)
+          const result = await runOptimize(ctx, text, opts)
           // 业务失败仍以 200 应答：客户端按 { ok: false, error } 展示原因，
           // 避免把可读错误混入 fetch 的 HTTP 异常分支。
           sendJson(res, 200, result)

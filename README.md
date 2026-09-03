@@ -97,7 +97,8 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 | 版本 | 变更 |
 |------|------|
-| v0.7.4 | 修复真实根因（finish=max-tokens 空返回）：模型思考把输出额度耗尽、正文未开始。输出额度 1024→2048，遇 max-tokens 空返回自动扩容到 8192 重试一次；失败按真实 finish 原因提示 |
+| v0.7.5 | 提速：默认显式关闭模型思考（reasoningEffort:'off'，提示词改写不需要深度推理），并开放 reasoningEffort/maxTokens/temperature 三项可调参数（profile patch 按 id 覆盖） |
+| v0.7.4 | 修复真实根因（finish=max-tokens 空返回）：模型思考把输出额度耗尽、正文未开始；遇 max-tokens 空返回自动扩容重试一次，失败按真实 finish 原因提示 |
 | v0.7.3 | 错误红字不再单行硬截断：可换行显示（最多 3 行），悬停看全文、点击可手动关闭 |
 | v0.7.2 | 修复：出现错误红字后点击发送/清空输入框时，红字提醒未消失；现与参考区一致随发送/清空自动清除 |
 | v0.7.1 | 修复“模型未返回有效内容”：强化 system 指令，要求模型对无指令草稿也必须输出改写版；空返回时给出可操作提示（补充“请帮我…”类任务再试） |
@@ -108,6 +109,22 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 | v3 | 原文+优化文在编辑区内上下两段（发送会带原文，已废弃） |
 | v2 | 输入框上方 dock 对比面板（超界，已废弃） |
 | v1 | 仅替换草稿+撤销（无对比展示） |
+
+## 可调参数（可选）
+
+默认值面向“快”：`reasoningEffort: off`（提示词改写不做深度推理）、
+`maxTokens: 1500`、`temperature: 0.3`。想调整时，在
+`$DSH_HOME/profiles/web/cordis.patch.yml` 里按 id 覆盖本插件行并给出 config
+（覆盖需要重述整行）：
+
+```yaml
+- id: prompt-optimizer
+  name: prompt-optimizer-plugin
+  config:
+    reasoningEffort: low   # off | low | high | max
+    maxTokens: 2048
+    temperature: 0.2
+```
 
 ## 开发与调试
 
