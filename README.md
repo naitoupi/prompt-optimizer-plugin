@@ -31,6 +31,14 @@ npm install -g pnpm
 
 **第 2 步：把插件安装到 DSH**
 
+**方式一：直接从 GitHub 安装（推荐给所有人，最简单）**
+
+```powershell
+dsh plugin --profile web add github:naitoupi/prompt-optimizer-plugin
+```
+
+**方式二：从本地文件夹安装（比如你自己下载了源码）**
+
 ```powershell
 dsh plugin --profile web add 插件文件夹的完整路径
 ```
@@ -43,7 +51,7 @@ dsh plugin --profile web add C:\Users\你的用户名\Desktop\prompt-optimizer-p
 
 （如果你是从 GitHub 下载的压缩包，解压后找到里面 `package.json` 所在的文件夹，把它的完整路径填进来即可。）
 
-看到类似 `+ prompt-optimizer-plugin link:...` 和 `Done in ...` 就是成功了。
+看到类似 `+ prompt-optimizer-plugin link:...` 和 `Done in ...` 就是成功了。这个插件没有构建步骤，安装时不会运行任何代码，简单又安全。
 
 **第 3 步：重启 DSH**
 
@@ -96,4 +104,8 @@ dsh plugin --profile web remove prompt-optimizer-plugin
 ## 小提示
 
 - 插件所有设置（开关、参数、自定义指令）都存在你的电脑上：`~/.dsh/prompt-optimizer-state.json`，删除这个文件等于把所有设置恢复成初始状态。
-- 本插件是开源的个人作品，界面文字以中文为主。
+- 本插件是开源的个人作品，界面文字以中文为主，开源许可：MIT。
+
+## 开源许可
+
+[MIT License](LICENSE)（Copyright © 2026 naitoupi）。欢迎在自己机器上自由安装、修改后再分发。

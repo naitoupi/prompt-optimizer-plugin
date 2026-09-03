@@ -10,6 +10,14 @@
     "prompt-optimizer",
     "dsh-bundle"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/naitoupi/prompt-optimizer-plugin.git"
+  },
+  "homepage": "https://github.com/naitoupi/prompt-optimizer-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/naitoupi/prompt-optimizer-plugin/issues"
+  },
   "type": "module",
   "main": "src/host.js",
   "files": [
