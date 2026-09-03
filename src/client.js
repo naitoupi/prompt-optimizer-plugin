@@ -153,24 +153,72 @@ window.__ModuleLoader__.load({
       var promptPair = React.useState(null)
       var promptText = promptPair[0]
       var setPromptText = promptPair[1]
+      var draftPair = React.useState('')
+      var promptDraft = draftPair[0]
+      var setPromptDraft = draftPair[1]
+      var customPair = React.useState(false)
+      var promptIsCustom = customPair[0]
+      var setPromptIsCustom = customPair[1]
       var copyPair = React.useState('')
       var copyMsg = copyPair[0]
       var setCopyMsg = copyPair[1]
 
+      function loadPromptOnce() {
+        if (promptText !== null) return
+        fetch(PROMPT_URL).then(function (res) { return res.json() }).then(function (d) {
+          if (d !== null && typeof d === 'object' && d.ok === true && typeof d.prompt === 'string') {
+            setPromptText(d.prompt)
+            setPromptDraft(d.prompt)
+            setPromptIsCustom(d.isCustom === true)
+          } else {
+            setPromptText('')
+            setPromptDraft('')
+            setPromptIsCustom(false)
+          }
+        }).catch(function () {
+          setPromptText('')
+          setPromptDraft('')
+        })
+      }
+
       function togglePrompt() {
         if (showPrompt) { setShowPrompt(false); return }
         setShowPrompt(true)
-        if (promptText !== null) return
-        fetch(PROMPT_URL).then(function (res) { return res.json() }).then(function (d) {
-          setPromptText(d !== null && typeof d === 'object' && d.ok === true && typeof d.prompt === 'string'
-            ? d.prompt : '（读取失败，请确认插件已在运行）')
-        }).catch(function () {
-          setPromptText('（读取失败，请确认插件已在运行）')
+        loadPromptOnce()
+      }
+
+      function savePrompt() {
+        if (promptText === null) { loadPromptOnce(); return }
+        if (typeof promptDraft !== 'string' || promptDraft.trim() === '') {
+          setError('指令内容不能为空')
+          return
+        }
+        return busyWrap(function () {
+          return postJson(PROMPT_URL, { prompt: promptDraft }).then(function (d) {
+            setPromptText(d.prompt)
+            setPromptDraft(d.prompt)
+            setPromptIsCustom(d.isCustom === true)
+            setMsg('优化指令已保存并即时生效')
+            return d
+          })
+        })
+      }
+
+      function resetPrompt() {
+        if (promptText === null) { loadPromptOnce(); return }
+        return busyWrap(function () {
+          return postJson(PROMPT_URL, { reset: true }).then(function (d) {
+            setPromptText(d.prompt)
+            setPromptDraft(d.prompt)
+            setPromptIsCustom(false)
+            setMsg('已恢复默认优化指令')
+            return d
+          })
         })
       }
 
       function copyPrompt() {
-        if (typeof promptText !== 'string') return
+        if (typeof promptText !== 'string' || promptText === '') return
         function fallback() { setCopyMsg('复制失败') }
         if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
           navigator.clipboard.writeText(promptText).then(function () {
@@ -332,12 +380,13 @@ window.__ModuleLoader__.load({
         h('div', {
           style: { borderTop: '1px solid rgba(128,128,128,0.25)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' },
         },
-          h('div', { style: { fontWeight: 600, fontSize: '13px' } }, '默认优化指令（system prompt）'),
+          h('div', { style: { fontWeight: 600, fontSize: '13px' } }, '优化指令（system prompt，可编辑）'),
           h('div', { style: { fontSize: '12px', lineHeight: '1.7', opacity: 0.85 } },
-            '以下为点击 ✨ 优化时，模型收到的内置指令（由插件内置，暂不支持编辑）：'),
+            '点击 ✨ 优化时模型收到的指令。当前使用：' + (promptIsCustom ? '自定义版本' : '内置默认版'),
+            h('div', {}, '保存后立即生效；「恢复默认」即回到内置的标准优化指令。')),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
             h('button', { type: 'button', onClick: togglePrompt, style: rowStyle },
-              showPrompt ? '收起' : '显示'),
+              showPrompt ? '收起' : '展开编辑'),
             promptText !== null
               ? h('button', { type: 'button', onClick: copyPrompt, style: rowStyle }, '复制')
               : null,
@@ -346,15 +395,28 @@ window.__ModuleLoader__.load({
               : null,
           ),
           showPrompt
-            ? h('pre', {
-                style: {
-                  margin: '0', padding: '10px 12px', borderRadius: '8px',
-                  border: '1px solid rgba(128,128,128,0.3)', boxSizing: 'border-box',
-                  background: 'rgba(128,128,128,0.06)', color: 'inherit',
-                  fontSize: '12px', lineHeight: '1.6', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  maxHeight: '320px', overflowY: 'auto',
-                },
-              }, promptText)
+            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+                h('textarea', {
+                  value: promptDraft,
+                  onChange: function (e) { setPromptDraft(e.target.value) },
+                  spellCheck: false,
+                  style: {
+                    width: '100%', boxSizing: 'border-box', minHeight: '180px', resize: 'vertical',
+                    padding: '10px 12px', borderRadius: '8px',
+                    border: '1px solid rgba(128,128,128,0.35)',
+                    background: 'rgba(128,128,128,0.06)', color: 'inherit',
+                    fontSize: '12px', lineHeight: '1.6', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  },
+                }),
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+                  h('button', {
+                    type: 'button', disabled: busy, onClick: savePrompt,
+                    style: { ...rowStyle, borderColor: 'rgba(96,125,255,0.65)', color: 'inherit' },
+                  }, busy ? '保存中…' : '保存指令'),
+                  h('button', { type: 'button', disabled: busy, onClick: resetPrompt, style: rowStyle }, '恢复默认指令'),
+                ),
+              )
             : null,
         ),
 

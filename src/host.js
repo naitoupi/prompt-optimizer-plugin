@@ -69,14 +69,17 @@ function loadState() {
     if (normalizeEffort(raw.reasoningEffort, null) !== null) state.reasoningEffort = raw.reasoningEffort
     if (normalizeMaxTokens(raw.maxTokens, null) !== null) state.maxTokens = raw.maxTokens
     if (normalizeTemperature(raw.temperature, null) !== null) state.temperature = raw.temperature
+    if (typeof raw.prompt === 'string' && raw.prompt.trim() !== '' && raw.prompt.length <= MAX_PROMPT_BYTES) {
+      state.prompt = raw.prompt
+    }
     return state
   } catch (e) {
     return {}
   }
 }
 
-/** 把生效后的完整 settings 快照落盘（enabled 与各参数都按当前内存值保存）。 */
-function saveState(enabled, settings) {
+/** 把生效后的完整 settings 快照落盘（enabled、各参数与可选的 prompt 覆盖按当前内存值保存）。 */
+function saveState(enabled, settings, promptOverride) {
   try {
     mkdirSync(dshHome(), { recursive: true })
     writeFileSync(STATE_FILE, JSON.stringify({
@@ -84,11 +87,24 @@ function saveState(enabled, settings) {
       ...settings.reasoningEffort === undefined ? {} : { reasoningEffort: settings.reasoningEffort },
       ...settings.maxTokens === undefined ? {} : { maxTokens: settings.maxTokens },
       ...settings.temperature === undefined ? {} : { temperature: settings.temperature },
+      ...promptOverride === undefined ? {} : { prompt: promptOverride },
       savedAt: Date.now(),
     }), 'utf8')
   } catch (e) {
     // ignore: in-memory values still apply for this process
   }
+}
+
+/** 自定义指令长度上限（与请求体上限一致，留足余量）。 */
+const MAX_PROMPT_BYTES = 32 * 1024
+
+/** 校验自定义指令：合法则返回原值，否则 null。 */
+function normalizePrompt(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (trimmed === '') return null
+  if (value.length > MAX_PROMPT_BYTES) return null
+  return value
 }
 
 /** 提示词优化专用 system 指令：要求模型直接输出优化后的提示词正文，不做任何解释。 */
@@ -161,7 +177,7 @@ function defaultModelOf(ctx) {
  * 提示词改写是聚焦重写任务，不需要深度推理；不传会让 API 侧自行深思考，
  * 既慢又会把输出额度吃光（finish=max-tokens、零正文）。默认关掉思考。
  */
-async function streamOnce(llm, selection, text, maxTokens, temperature, reasoningEffort) {
+async function streamOnce(llm, selection, text, maxTokens, temperature, reasoningEffort, systemPrompt) {
   let out = ''
   let reasoning = ''
   let finishKind = null
@@ -172,7 +188,7 @@ async function streamOnce(llm, selection, text, maxTokens, temperature, reasonin
     maxTokens,
     temperature,
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
     messages: [{
       id: 'prompt-opt-' + Math.random().toString(36).slice(2),
       role: 'user',
@@ -214,7 +230,7 @@ function essentiallySame(optimized, text) {
  * 用可配置的推理强度/额度/温度执行；遇 finish=max-tokens 空返回时自动扩容
  * 重试一次；最终失败按真实 finish 原因给出可操作提示。
  */
-async function runOptimize(ctx, text, opts) {
+async function runOptimize(ctx, text, opts, systemPrompt) {
   const llm = ctx.get('llm')
   if (llm === undefined || typeof llm.stream !== 'function') {
     return { ok: false, error: 'LLM 服务不可用' }
@@ -234,7 +250,7 @@ async function runOptimize(ctx, text, opts) {
     ]
     for (let i = 0; i < attempts.length; i++) {
       const attempt = attempts[i]
-      const r = await streamOnce(llm, selection, text, attempt.maxTokens, temperature, reasoningEffort)
+      const r = await streamOnce(llm, selection, text, attempt.maxTokens, temperature, reasoningEffort, systemPrompt)
       const optimized = r.out.trim()
       if (optimized) {
         // 模型判断“无需优化”时会把原文原样返回：标记 unchanged，让客户端
@@ -311,6 +327,8 @@ export function apply(ctx, config) {
     maxTokens: state.maxTokens !== undefined ? state.maxTokens : rowOpts.maxTokens,
     temperature: state.temperature !== undefined ? state.temperature : rowOpts.temperature,
   })
+  // 生效指令 = UI 自定义（优先）→ 内置默认优化指令
+  const promptOf = () => state.prompt !== undefined ? state.prompt : SYSTEM_PROMPT
   const snapshot = () => ({ enabled: enabledOf(), settings: effectiveOf() })
   // 双保险：module 级 inject 之外再用 ctx.inject 等一次，保证注册发生在
   // webServer 服务可用之后（ctx.inject 在服务已就绪时同步执行）。
@@ -336,7 +354,7 @@ export function apply(ctx, config) {
             sendJson(res, 400, { ok: false, error: '输入为空' })
             return
           }
-          const result = await runOptimize(ctx, text, effectiveOf())
+          const result = await runOptimize(ctx, text, effectiveOf(), promptOf())
           // 业务失败仍以 200 应答：客户端按 { ok: false, error } 展示原因，
           // 避免把可读错误混入 fetch 的 HTTP 异常分支。
           sendJson(res, 200, result)
@@ -364,7 +382,7 @@ export function apply(ctx, config) {
         try {
           const payload = await readJsonBody(req)
           state.enabled = payload !== null && payload.enabled === true
-          saveState(state.enabled, effectiveOf())
+          saveState(state.enabled, effectiveOf(), state.prompt)
           const snap = snapshot()
           sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings })
         } catch (e) {
@@ -373,12 +391,36 @@ export function apply(ctx, config) {
       },
     }))
 
-    // 只读：当前内置的默认优化指令（供设置页展示/复制，单一来源在此）
+    // 优化指令：GET 读当前生效指令（含是否自定义）；POST 保存自定义或 reset 恢复默认
     disposers.push(server.register({
       kind: 'exact',
       path: PROMPT_PATH,
       handler: async (req, res) => {
-        sendJson(res, 200, { ok: true, prompt: SYSTEM_PROMPT })
+        try {
+          if (req.method !== 'GET' && req.method !== 'POST') {
+            sendJson(res, 405, { ok: false, error: '方法不支持' })
+            return
+          }
+          if (req.method === 'GET') {
+            sendJson(res, 200, { ok: true, prompt: promptOf(), isCustom: state.prompt !== undefined })
+            return
+          }
+          const payload = await readJsonBody(req)
+          if (payload === null) throw new Error('请求体格式错误')
+          if (payload.reset === true) {
+            delete state.prompt
+            saveState(enabledOf(), effectiveOf(), state.prompt)
+            sendJson(res, 200, { ok: true, prompt: promptOf(), isCustom: false })
+            return
+          }
+          const next = normalizePrompt(payload.prompt)
+          if (next === null) throw new Error('指令内容不能为空（最多 32 KiB）')
+          state.prompt = next
+          saveState(enabledOf(), effectiveOf(), state.prompt)
+          sendJson(res, 200, { ok: true, prompt: state.prompt, isCustom: true })
+        } catch (e) {
+          sendJson(res, 400, { ok: false, error: String((e && e.message) || e) })
+        }
       },
     }))
 
@@ -406,7 +448,7 @@ export function apply(ctx, config) {
               state.temperature = normalizeTemperature(payload.temperature, rowOpts.temperature)
             }
           }
-          saveState(enabledOf(), effectiveOf())
+          saveState(enabledOf(), effectiveOf(), state.prompt)
           const snap = snapshot()
           sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings })
         } catch (e) {
