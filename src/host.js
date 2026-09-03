@@ -428,13 +428,13 @@ export function apply(ctx, config) {
       },
     }))
 
-    // 读启用状态与生效参数
+    // 读启用状态、生效参数与插件版本
     disposers.push(server.register({
       kind: 'exact',
       path: STATE_PATH,
       handler: async (req, res) => {
         const snap = snapshot()
-        sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings })
+        sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings, version: snap.version })
       },
     }))
 
@@ -448,7 +448,7 @@ export function apply(ctx, config) {
           state.enabled = payload !== null && payload.enabled === true
           saveState(state.enabled, effectiveOf(), state.prompt)
           const snap = snapshot()
-          sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings })
+          sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings, version: snap.version })
         } catch (e) {
           sendJson(res, 500, { ok: false, error: String((e && e.message) || e) })
         }
@@ -525,7 +525,7 @@ export function apply(ctx, config) {
           }
           saveState(enabledOf(), effectiveOf(), state.prompt)
           const snap = snapshot()
-          sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings })
+          sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings, version: snap.version })
         } catch (e) {
           sendJson(res, 500, { ok: false, error: String((e && e.message) || e) })
         }
