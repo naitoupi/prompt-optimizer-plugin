@@ -1,22 +1,25 @@
-# Prompt Optimizer — DSH 可安装插件（v8 / bundle）
+# Prompt Optimizer — DSH 可安装插件（v9 / bundle）
 
 在 DeepSeek Harness（DSH）对话输入框旁提供「提示词优化」能力：
 点 ✨ 优化后用当前默认模型改写草稿，输入框直接替换为优化文（发送即优化文），
 原文浮动展示在输入框上方作为只读参考，可一键撤销恢复。
 
-v8 亮点：可在 **设置 → 插件 → 提示词优化** 里一键**启用/停用**（免重启，即时生效）。
+v8+ 亮点：**设置 → 插件 → 提示词优化** Tab 内可一键**启用/停用**，并直接调整
+**生成参数**（思考强度 / maxTokens / 温度）——免重启，即时生效。
 
 v7 起把「动态热加载双端插件（cordis_define / cordis_run）」改造成
 **可安装的 dsh bundle 插件**：以 npm 包形态装进 profile，随 `dsh web`
 启动自动加载，不再需要每次让模型把代码注入进程。
 
-## 启用 / 停用（v8）
+## 设置页（v8/v9）
 
-打开 **设置 → 插件** 页 → 切到「提示词优化」Tab → 点「停用插件 / 启用插件」：
+打开 **设置 → 插件** 页 → 切到「提示词优化」Tab：
 
-- 停用后：对话输入框不再显示 ✨ 按钮，Host 也拒绝优化调用（不会产生模型费用）；
-- 即时生效，**无需重启**；状态持久化在 `~/.dsh/prompt-optimizer-state.json`；
-- 已经在其他标签页打开的对话页面，刷新一次即可同步按钮状态。
+- **启用/停用**：停用后对话输入框不再显示 ✨ 按钮，Host 也拒绝优化调用（不会产生模型费用）；
+- **生成参数**：思考强度（off/low/high/max）、最大输出 tokens、温度——点「保存参数」立即生效；
+- 「恢复默认」= off / 1500 / 0.1；
+- 全部**免重启**；状态持久化在 `~/.dsh/prompt-optimizer-state.json`；
+- 已经在其他标签页打开的对话页面，刷新一次即可同步状态。
 
 ## 交互规则（与 v6 相同）
 
@@ -107,6 +110,7 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 | 版本 | 变更 |
 |------|------|
+| v0.9.0 | 设置页新增「生成参数」：思考强度 / maxTokens / 温度可视化调整，保存即生效；参数优先级：UI 保存值 > profile patch > 内置默认 |
 | v0.8.0 | 新增「启用/停用」开关：设置 → 插件 → 提示词优化 Tab；停用即隐藏 ✨ 按钮、拒绝调用；免重启、即时生效 |
 | v0.7.6 | 抑制随机与“硬优化”：temperature 默认 0.1；系统指令要求最小化改动、同输入稳定；无需优化时原样返回并提示“已是最优” |
 | v0.7.5 | 提速：默认显式关闭模型思考（reasoningEffort:'off'，提示词改写不需要深度推理），并开放 reasoningEffort/maxTokens/temperature 三项可调参数（profile patch 按 id 覆盖） |
@@ -125,9 +129,13 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 ## 可调参数（可选）
 
 默认值面向“快且稳”：`reasoningEffort: off`（提示词改写不做深度推理）、
-`maxTokens: 1500`、`temperature: 0.1`（低温度 → 结果更可复现）。想调整时，在
+`maxTokens: 1500`、`temperature: 0.1`（低温度 → 结果更可复现）。
+
+**优先在设置页调整**（设置 → 插件 → 提示词优化，UI 保存后立即生效并持久化）。
+
+如需“开箱默认值”（例如给所有 profile / 部署方下发默认参数），也可以在
 `$DSH_HOME/profiles/web/cordis.patch.yml` 里按 id 覆盖本插件行并给出 config
-（覆盖需要重述整行）：
+（覆盖需要重述整行）——它作为**回落默认**：UI 未保存过对应参数时生效：
 
 ```yaml
 - id: prompt-optimizer
@@ -137,6 +145,8 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
     maxTokens: 2048
     temperature: 0.2
 ```
+
+参数优先级：**UI 保存值 > profile patch config > 内置默认**（UI 点“恢复默认”可回到后两者）。
 
 ## 开发与调试
 

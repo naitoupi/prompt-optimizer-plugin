@@ -27,6 +27,7 @@ const OPTIMIZE_PATH = '/plugins/prompt-optimizer-plugin/optimize'
 /** 同源状态端点：GET 读启用状态；POST 写启用状态。 */
 const STATE_PATH = '/plugins/prompt-optimizer-plugin/state'
 const SET_STATE_PATH = '/plugins/prompt-optimizer-plugin/set-state'
+const SETTINGS_PATH = '/plugins/prompt-optimizer-plugin/settings'
 
 /** 解析 dsh home（env 优先，缺省用用户目录下的 .dsh）。 */
 function dshHome() {
@@ -37,24 +38,53 @@ function dshHome() {
 
 const STATE_FILE = join(dshHome(), 'prompt-optimizer-state.json')
 
-/** 读取持久化的启用状态（缺文件/损坏一律视为启用）。 */
-function loadEnabled() {
+// ── 持久化 state：{ enabled, reasoningEffort?, maxTokens?, temperature? } ──
+// 未显式保存的生成参数回落到 Loader 行 config（见 apply 里的 rowOpts），
+// 行 config 又回落到内置 DEFAULTS——形成：UI 保存值 > profile patch > 内置默认。
+// (Persisted UI overrides only; unset generation params fall back to the Loader
+// row config, which in turn falls back to the built-in DEFAULTS)
+
+function normalizeEffort(value, fallback) {
+  return value === 'off' || value === 'low' || value === 'high' || value === 'max' ? value : fallback
+}
+
+function normalizeMaxTokens(value, fallback) {
+  return Number.isSafeInteger(value) && value >= 64 ? value : fallback
+}
+
+function normalizeTemperature(value, fallback) {
+  return typeof value === 'number' && value >= 0 && value <= 2 ? value : fallback
+}
+
+function loadState() {
   try {
-    if (!existsSync(STATE_FILE)) return true
+    if (!existsSync(STATE_FILE)) return {}
     const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
-    return raw !== null && typeof raw === 'object' && typeof raw.enabled === 'boolean' ? raw.enabled : true
+    if (raw === null || typeof raw !== 'object') return {}
+    const state = {}
+    if (typeof raw.enabled === 'boolean') state.enabled = raw.enabled
+    if (normalizeEffort(raw.reasoningEffort, null) !== null) state.reasoningEffort = raw.reasoningEffort
+    if (normalizeMaxTokens(raw.maxTokens, null) !== null) state.maxTokens = raw.maxTokens
+    if (normalizeTemperature(raw.temperature, null) !== null) state.temperature = raw.temperature
+    return state
   } catch (e) {
-    return true
+    return {}
   }
 }
 
-/** 写入启用状态（尽力而为：写失败不致命，进程内仍按新值生效）。 */
-function saveEnabled(enabled) {
+/** 把生效后的完整 settings 快照落盘（enabled 与各参数都按当前内存值保存）。 */
+function saveState(enabled, settings) {
   try {
     mkdirSync(dshHome(), { recursive: true })
-    writeFileSync(STATE_FILE, JSON.stringify({ enabled, savedAt: Date.now() }), 'utf8')
+    writeFileSync(STATE_FILE, JSON.stringify({
+      enabled,
+      ...settings.reasoningEffort === undefined ? {} : { reasoningEffort: settings.reasoningEffort },
+      ...settings.maxTokens === undefined ? {} : { maxTokens: settings.maxTokens },
+      ...settings.temperature === undefined ? {} : { temperature: settings.temperature },
+      savedAt: Date.now(),
+    }), 'utf8')
   } catch (e) {
-    // ignore: in-memory value still applies for this process
+    // ignore: in-memory values still apply for this process
   }
 }
 
@@ -268,8 +298,17 @@ function resolveConfig(config) {
 }
 
 export function apply(ctx, config) {
-  const opts = resolveConfig(config)
-  let enabled = loadEnabled()
+  const rowOpts = resolveConfig(config)
+  // 运行态 state：持久化 UI 覆盖值（enabled 默认开；生成参数缺省→回落行 config）
+  const state = loadState()
+  const enabledOf = () => state.enabled === false ? false : true
+  // 生效参数 = UI 保存值（优先）→ 行 config → DEFAULTS
+  const effectiveOf = () => ({
+    reasoningEffort: state.reasoningEffort !== undefined ? state.reasoningEffort : rowOpts.reasoningEffort,
+    maxTokens: state.maxTokens !== undefined ? state.maxTokens : rowOpts.maxTokens,
+    temperature: state.temperature !== undefined ? state.temperature : rowOpts.temperature,
+  })
+  const snapshot = () => ({ enabled: enabledOf(), settings: effectiveOf() })
   // 双保险：module 级 inject 之外再用 ctx.inject 等一次，保证注册发生在
   // webServer 服务可用之后（ctx.inject 在服务已就绪时同步执行）。
   ctx.inject(['webServer'], (web) => {
@@ -284,7 +323,7 @@ export function apply(ctx, config) {
       path: OPTIMIZE_PATH,
       handler: async (req, res) => {
         try {
-          if (!enabled) {
+          if (!enabledOf()) {
             sendJson(res, 200, { ok: false, error: '插件已停用：请到 设置 → 插件 → 提示词优化 开启后再试' })
             return
           }
@@ -294,7 +333,7 @@ export function apply(ctx, config) {
             sendJson(res, 400, { ok: false, error: '输入为空' })
             return
           }
-          const result = await runOptimize(ctx, text, opts)
+          const result = await runOptimize(ctx, text, effectiveOf())
           // 业务失败仍以 200 应答：客户端按 { ok: false, error } 展示原因，
           // 避免把可读错误混入 fetch 的 HTTP 异常分支。
           sendJson(res, 200, result)
@@ -304,12 +343,13 @@ export function apply(ctx, config) {
       },
     }))
 
-    // 读启用状态
+    // 读启用状态与生效参数
     disposers.push(server.register({
       kind: 'exact',
       path: STATE_PATH,
       handler: async (req, res) => {
-        sendJson(res, 200, { ok: true, enabled })
+        const snap = snapshot()
+        sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings })
       },
     }))
 
@@ -320,10 +360,43 @@ export function apply(ctx, config) {
       handler: async (req, res) => {
         try {
           const payload = await readJsonBody(req)
-          const next = payload !== null && payload.enabled === true
-          enabled = next
-          saveEnabled(next)
-          sendJson(res, 200, { ok: true, enabled: next })
+          state.enabled = payload !== null && payload.enabled === true
+          saveState(state.enabled, effectiveOf())
+          const snap = snapshot()
+          sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings })
+        } catch (e) {
+          sendJson(res, 500, { ok: false, error: String((e && e.message) || e) })
+        }
+      },
+    }))
+
+    // 更新生成参数（reasoningEffort / maxTokens / temperature，支持部分更新；
+    // reset:true 清空 UI 覆盖、回落到 profile patch / 内置默认）
+    disposers.push(server.register({
+      kind: 'exact',
+      path: SETTINGS_PATH,
+      handler: async (req, res) => {
+        try {
+          const payload = await readJsonBody(req)
+          if (payload === null) throw new Error('请求体格式错误')
+          if (payload.reset === true) {
+            delete state.reasoningEffort
+            delete state.maxTokens
+            delete state.temperature
+          } else {
+            if (payload.reasoningEffort !== undefined) {
+              state.reasoningEffort = normalizeEffort(payload.reasoningEffort, rowOpts.reasoningEffort)
+            }
+            if (payload.maxTokens !== undefined) {
+              state.maxTokens = normalizeMaxTokens(payload.maxTokens, rowOpts.maxTokens)
+            }
+            if (payload.temperature !== undefined) {
+              state.temperature = normalizeTemperature(payload.temperature, rowOpts.temperature)
+            }
+          }
+          saveState(enabledOf(), effectiveOf())
+          const snap = snapshot()
+          sendJson(res, 200, { ok: true, enabled: snap.enabled, settings: snap.settings })
         } catch (e) {
           sendJson(res, 500, { ok: false, error: String((e && e.message) || e) })
         }

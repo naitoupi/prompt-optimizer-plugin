@@ -31,24 +31,42 @@ window.__ModuleLoader__.load({
     var OPTIMIZE_URL = '/plugins/prompt-optimizer-plugin/optimize'
     var STATE_URL = '/plugins/prompt-optimizer-plugin/state'
     var SET_STATE_URL = '/plugins/prompt-optimizer-plugin/set-state'
+    var SETTINGS_URL = '/plugins/prompt-optimizer-plugin/settings'
 
-    // ── 启用状态 store：页面内多处（工具行/参考区/设置开关）共享，实时联动 ──
-    // (Shared enabled-state store: toolbar, dock and the settings switch stay in sync live)
-    var storeState = { enabled: true }
+    // ── 插件状态 store（页面内共享，实时联动）──
+    // 内容 = Host 的 state 快照：{ enabled, settings: { reasoningEffort, maxTokens, temperature } }
+    var storeState = {
+      enabled: true,
+      settings: { reasoningEffort: 'off', maxTokens: 1500, temperature: 0.1 },
+    }
     var stateListeners = new Set()
 
     function publishState() {
-      stateListeners.forEach(function (fn) { fn(storeState.enabled) })
+      stateListeners.forEach(function (fn) { fn(storeState) })
     }
 
-    /** 从 Host 拉一次启用状态（页面加载时调用；失败保持现状）。 */
+    /** 把 Host 返回的 { enabled, settings } 归一化后写入本地 store。 */
+    function applyRemoteState(d) {
+      if (d === null || typeof d !== 'object') return
+      var settings = d.settings !== null && typeof d.settings === 'object' ? d.settings : {}
+      var effort = settings.reasoningEffort
+      var nextSettings = {
+        reasoningEffort: effort === 'off' || effort === 'low' || effort === 'high' || effort === 'max'
+          ? effort : storeState.settings.reasoningEffort,
+        maxTokens: Number.isFinite(settings.maxTokens) ? settings.maxTokens : storeState.settings.maxTokens,
+        temperature: typeof settings.temperature === 'number' ? settings.temperature : storeState.settings.temperature,
+      }
+      storeState = {
+        enabled: typeof d.enabled === 'boolean' ? d.enabled : storeState.enabled,
+        settings: nextSettings,
+      }
+      publishState()
+    }
+
+    /** 从 Host 拉一次状态（页面加载/组件挂载时调用；失败保持现状）。 */
     function refreshState() {
-      return fetch(STATE_URL).then(function (res) { return res.json() }).then(function (d) {
-        if (d !== null && typeof d === 'object' && typeof d.enabled === 'boolean' && d.enabled !== storeState.enabled) {
-          storeState.enabled = d.enabled
-          publishState()
-        }
-      }).catch(function () { /* keep last known state */ })
+      return fetch(STATE_URL).then(function (res) { return res.json() }).then(applyRemoteState)
+        .catch(function () { /* keep last known state */ })
     }
 
     function subscribeState(fn) {
@@ -56,16 +74,37 @@ window.__ModuleLoader__.load({
       return function () { stateListeners.delete(fn) }
     }
 
-    /** React 订阅当前启用状态（挂载时拉取一次 + 订阅后续变化）。 */
-    function useEnabled() {
-      var pair = React.useState(storeState.enabled)
-      var enabled = pair[0]
-      var setEnabled = pair[1]
+    /** React 订阅当前状态快照（挂载时拉取一次 + 订阅后续变化）。 */
+    function usePluginState() {
+      var pair = React.useState(storeState)
+      var snapshot = pair[0]
+      var setSnapshot = pair[1]
       React.useEffect(function () {
         refreshState()
-        return subscribeState(function (v) { setEnabled(v) })
+        return subscribeState(function (s) { setSnapshot(s) })
       }, [])
-      return enabled
+      return snapshot
+    }
+
+    /** 便捷钩子：插件当前是否启用。 */
+    function useEnabled() {
+      return usePluginState().enabled
+    }
+
+    /** POST JSON 到 Host 端点并解析返回体（HTTP/网络错误抛出）。 */
+    function postJson(url, body) {
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(async (res) => {
+        var data = null
+        try { data = await res.json() } catch (e) { data = null }
+        if (!res.ok || data === null || typeof data !== 'object' || data.ok !== true) {
+          throw new Error(data !== null && typeof data.error === 'string' ? data.error : 'HTTP ' + res.status)
+        }
+        return data
+      })
     }
 
     /**
@@ -89,44 +128,89 @@ window.__ModuleLoader__.load({
       })
     }
 
-    // ── 设置 → 插件 → 提示词优化：启用/停用开关 Tab ──
-    // (Settings → Plugins → Prompt Optimizer tab with the on/off switch)
+    // ── 设置 → 插件 → 提示词优化：启用开关 + 生成参数 ──
+    // (Settings → Plugins → Prompt Optimizer tab: on/off switch + generation params)
     function OptimizerSettingsTab() {
-      var enabled = useEnabled()
+      var snap = usePluginState()
+      var enabled = snap.enabled
+      var settings = snap.settings
+
       var busyPair = React.useState(false)
       var busy = busyPair[0]
       var setBusy = busyPair[1]
+      var msgPair = React.useState(null)
+      var msg = msgPair[0]
+      var setMsg = msgPair[1]
       var errPair = React.useState(null)
       var error = errPair[0]
       var setError = errPair[1]
-      var donePair = React.useState(false)
-      var done = donePair[0]
-      var setDone = donePair[1]
 
-      function flip() {
-        if (busy) return
+      var effortPair = React.useState(settings.reasoningEffort)
+      var effort = effortPair[0]
+      var setEffort = effortPair[1]
+      var tokensPair = React.useState(String(settings.maxTokens))
+      var tokensStr = tokensPair[0]
+      var setTokensStr = tokensPair[1]
+      var tempPair = React.useState(String(settings.temperature))
+      var tempStr = tempPair[0]
+      var setTempStr = tempPair[1]
+      // 远端值变化（保存/恢复默认/其他页面操作）时同步本地草稿
+      React.useEffect(function () {
+        setEffort(settings.reasoningEffort)
+        setTokensStr(String(settings.maxTokens))
+        setTempStr(String(settings.temperature))
+      }, [settings.reasoningEffort, settings.maxTokens, settings.temperature])
+
+      function busyWrap(task) {
         setBusy(true)
         setError(null)
-        setDone(false)
-        return fetch(SET_STATE_URL, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ enabled: !enabled }),
-        }).then(async (res) => {
-          var d = null
-          try { d = await res.json() } catch (e) { d = null }
-          if (!res.ok || d === null || typeof d !== 'object' || d.ok !== true) {
-            throw new Error((d !== null && typeof d.error === 'string' ? d.error : 'HTTP ' + res.status))
-          }
-          if (typeof d.enabled === 'boolean') {
-            storeState.enabled = d.enabled
-            publishState()
-          }
-          setDone(true)
-        }).catch(function (e) {
-          setError(String((e && e.message) || e))
-        }).then(function () {
-          setBusy(false)
+        setMsg(null)
+        return task()
+          .then(function (d) { return d })
+          .catch(function (e) {
+            setError(String((e && e.message) || e))
+            return null
+          })
+          .then(function (result) { setBusy(false); return result })
+      }
+
+      function flip() {
+        return busyWrap(function () {
+          return postJson(SET_STATE_URL, { enabled: !enabled }).then(function (d) {
+            applyRemoteState(d)
+            setMsg('已生效（无需重启）：' + (d.enabled === true ? '✨ 优化已恢复' : '✨ 优化已关闭，聊天输入框中的按钮将隐藏'))
+            return d
+          })
+        })
+      }
+
+      function saveSettings() {
+        var tokens = parseInt(tokensStr, 10)
+        var temp = parseFloat(tempStr)
+        if (!Number.isFinite(tokens) || tokens < 64) {
+          setError('最大输出 tokens 需为 ≥64 的整数')
+          return
+        }
+        if (!Number.isFinite(temp) || temp < 0 || temp > 2) {
+          setError('温度需在 0 ~ 2 之间')
+          return
+        }
+        return busyWrap(function () {
+          return postJson(SETTINGS_URL, { reasoningEffort: effort, maxTokens: tokens, temperature: temp }).then(function (d) {
+            applyRemoteState(d)
+            setMsg('生成参数已保存并立即生效')
+            return d
+          })
+        })
+      }
+
+      function resetSettings() {
+        return busyWrap(function () {
+          return postJson(SETTINGS_URL, { reset: true }).then(function (d) {
+            applyRemoteState(d)
+            setMsg('已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1）')
+            return d
+          })
         })
       }
 
@@ -136,26 +220,79 @@ window.__ModuleLoader__.load({
         border: '1px solid rgba(128,128,128,0.45)', background: 'transparent',
         color: 'inherit', fontSize: '13px', cursor: 'pointer',
       }
+      var inputStyle = {
+        height: '28px', minWidth: '150px', borderRadius: '6px', boxSizing: 'border-box',
+        padding: '0 8px', border: '1px solid rgba(128,128,128,0.4)',
+        background: 'transparent', color: 'inherit', fontSize: '13px', fontFamily: 'inherit',
+      }
+      var fieldLabel = { display: 'block', fontSize: '12px', opacity: 0.85, marginBottom: '4px' }
+      var fieldHint = { display: 'block', fontSize: '11px', opacity: 0.6, marginTop: '4px', lineHeight: '1.5' }
 
-      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '4px 2px', maxWidth: '760px' } },
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', padding: '4px 2px', maxWidth: '760px' } },
         h('div', { style: { fontWeight: 600, fontSize: '14px' } }, 'Prompt Optimizer（提示词优化）'),
         h('div', { style: { fontSize: '12px', lineHeight: '1.7', opacity: 0.85 } },
           '在对话输入框工具行提供 ✨ 优化：用当前模型把草稿改写为更清晰、更具体的提示词，支持 ↩ 一键撤销、原文浮动参考。',
           h('div', {}, '当前状态：' + (enabled ? '✅ 已启用' : '⏸ 已停用')),
-          h('div', {}, '停用后：输入框不再显示优化按钮，也不会发起任何模型调用；即时生效，无需重启 dsh。')),
+          h('div', {}, '停用后：输入框不再显示优化按钮，也不会发起任何模型调用。')),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
           h('button', {
-            type: 'button',
-            disabled: busy,
-            onClick: flip,
+            type: 'button', disabled: busy, onClick: flip,
             style: busy ? { ...rowStyle, opacity: 0.55, cursor: 'wait' } : rowStyle,
           }, busy ? '处理中…' : (enabled ? '停用插件' : '启用插件'))),
-        done
-          ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } },
-            '已生效（无需重启）：' + (enabled ? '✨ 优化已恢复' : '✨ 优化已关闭，聊天输入框中的按钮将隐藏'))
+
+        h('div', {
+          style: { borderTop: '1px solid rgba(128,128,128,0.25)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '12px' },
+        },
+          h('div', { style: { fontWeight: 600, fontSize: '13px' } }, '生成参数（点击优化时生效）'),
+          h('div', {},
+            h('label', { style: fieldLabel }, '思考强度（reasoningEffort）'),
+            h('select', {
+              value: effort,
+              onChange: function (e) { setEffort(e.target.value) },
+              style: { ...inputStyle, cursor: 'pointer' },
+            },
+              h('option', { value: 'off' }, 'off — 关闭思考（最快，推荐）'),
+              h('option', { value: 'low' }, 'low — 轻度思考'),
+              h('option', { value: 'high' }, 'high — 深度思考（更慢）'),
+              h('option', { value: 'max' }, 'max — 最强思考（最慢）'),
+            ),
+            h('span', { style: fieldHint }, '提示词改写通常不需要深度推理；off 速度快、额度不会被思考耗尽。'),
+          ),
+          h('div', {},
+            h('label', { style: fieldLabel }, '最大输出 tokens'),
+            h('input', {
+              type: 'number', min: 64, step: 64, value: tokensStr,
+              onChange: function (e) { setTokensStr(e.target.value) },
+              style: inputStyle,
+            }),
+            h('span', { style: fieldHint }, '单次改写允许生成的最大 token 数（≥64）。'),
+          ),
+          h('div', {},
+            h('label', { style: fieldLabel }, '温度（temperature，0 ~ 2）'),
+            h('input', {
+              type: 'number', min: 0, max: 2, step: 0.05, value: tempStr,
+              onChange: function (e) { setTempStr(e.target.value) },
+              style: inputStyle,
+            }),
+            h('span', { style: fieldHint }, '越低越稳定可复现（默认 0.1）；想要更多样化可调高。'),
+          ),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginTop: '2px' } },
+            h('button', {
+              type: 'button', disabled: busy, onClick: saveSettings,
+              style: { ...rowStyle, borderColor: 'rgba(96,125,255,0.65)', color: 'inherit' },
+            }, busy ? '保存中…' : '保存参数'),
+            h('button', {
+              type: 'button', disabled: busy, onClick: resetSettings,
+              style: rowStyle,
+            }, '恢复默认'),
+          ),
+        ),
+
+        msg
+          ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } }, msg)
           : null,
         error
-          ? h('div', { style: { color: '#e5484d', fontSize: '12px', maxWidth: '560px', lineHeight: '1.5' } }, '操作失败：' + error)
+          ? h('div', { style: { color: '#e5484d', fontSize: '12px', maxWidth: '560px', lineHeight: '1.5' } }, error)
           : null,
       )
     }
