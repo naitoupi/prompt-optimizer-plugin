@@ -28,7 +28,9 @@ const SYSTEM_PROMPT = [
   '2) 让指令更明确、目标更具体，可使用列表、分步骤等结构化表达；',
   '3) 如果需要，补充必要的约束、输出格式或上下文信息；',
   '4) 直接输出优化后的提示词正文本身，不要任何解释、前言、后记或代码块围栏；',
-  '5) 使用与原文相同的语言。',
+  '5) 使用与原文相同的语言；',
+  '6) 无论原文是否包含明确的“请…”式指令，都必须输出一个可用的改写/润色版本；',
+  '7) 严禁返回空内容、占位符（如“…”）或“无法优化/没有内容”之类的回复。',
 ].join('\n')
 
 /** 请求体上限（64 KiB），防止异常客户端撑爆内存。 */
@@ -78,7 +80,7 @@ function defaultModelOf(ctx) {
   return null
 }
 
-/** 核心优化逻辑：用选中模型改写文本（与 v6 host 沙箱体逐行一致）。 */
+/** 核心优化逻辑：用选中模型改写文本。空返回（finish 成功但无 text-delta）时给出可操作的提示。 */
 async function runOptimize(ctx, text) {
   const llm = ctx.get('llm')
   if (llm === undefined || typeof llm.stream !== 'function') {
@@ -90,10 +92,11 @@ async function runOptimize(ctx, text) {
   }
   try {
     let out = ''
+    let finishKind = null
     const stream = llm.stream({
       provider: selection.provider,
       model: selection.model,
-      maxTokens: 700,
+      maxTokens: 1024,
       temperature: 0.3,
       system: SYSTEM_PROMPT,
       messages: [{
@@ -108,6 +111,7 @@ async function runOptimize(ctx, text) {
         out += chunk.text
       } else if (chunk.type === 'finish') {
         const reason = chunk.reason
+        finishKind = reason && reason.kind ? reason.kind : null
         if (reason && (reason.kind === 'error' || reason.kind === 'aborted')) {
           const fail = reason.failure
           return { ok: false, error: (fail && fail.message) || '模型调用失败' }
@@ -115,7 +119,16 @@ async function runOptimize(ctx, text) {
       }
     }
     const optimized = out.trim()
-    if (!optimized) return { ok: false, error: '模型未返回有效内容' }
+    if (!optimized) {
+      // 实测：当草稿只是陈述、没有可执行的“请…”指令（或内容被模型判定无
+      // 任务可优化）时，模型会以成功 finish 返回空文本。提示用户补充目标
+      // 即可，而不是让他们以为功能坏了。
+      return {
+        ok: false,
+        error: '模型未返回有效内容：这段草稿缺少可执行的指令或目标（如“请帮我…”“改写成…”）。请在草稿中补充任务要求后重试，或把光标移到其他草稿上再点优化。'
+          + `（模型：${selection.provider}/${selection.model}，finish=${finishKind ?? 'unknown'}）`,
+      }
+    }
     return { ok: true, text: optimized }
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) }
