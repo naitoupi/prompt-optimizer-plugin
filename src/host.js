@@ -113,7 +113,7 @@ const SYSTEM_PROMPT = [
   'You will be given an original prompt. Rewrite it into a clearer, more specific, and more effective prompt.',
   'Requirements:',
   '1) Preserve every point of the original meaning; do not lose information;',
-  '2) Make the instructions clearer and the goals more specific; use lists, steps, or other structured formats when helpful;',
+  '2) Make the instructions clearer and the goals more specific WITHOUT reordering the meaning: keep the subject, object, and modifier relationship of every sentence exactly as in the original; use lists, steps, or other structured formats only when they do not disturb that relationship;',
   '3) Add necessary constraints, output format, or context when needed;',
   '4) Output only the optimized prompt text itself—no explanations, prefaces, afterwords, or code fences;',
   '5) Use the same language as the original text;',
@@ -121,7 +121,9 @@ const SYSTEM_PROMPT = [
   '7) If the original is not a prompt task (for example ordinary prose or casual content that cannot be improved), return it verbatim; do not invent instructions or content;',
   '8) Minimize changes: fix only genuine unclarity, incompleteness, or vagueness; keep the user\'s wording, structure, and intent; avoid pointless rewording;',
   '9) For identical input, keep the output stable; do not keep switching phrasing or structure;',
-  '10) Never output empty content or replies like “cannot optimize/no content”—returning the original verbatim is a valid “no change” result.',
+  '10) NEVER change grammatical roles or semantic relations: keep the subject and object of every action, all modifiers, negations, and clause order exactly as they are. Never swap, merge, or reorder sentence components just to sound smoother, and never add a negation or change a quantity;',
+  '11) Before rewriting, identify who does what to whom in the original; after rewriting, verify that every action still has the same actor and the same target as the original; if the wording was already clear and correct, return it verbatim instead of paraphrasing;',
+  '12) Never output empty content or replies like “cannot optimize/no content”—returning the original verbatim is a valid “no change” result.',
 ].join('\n')
 
 /** 按请求语言（'en' | 'zh'）选择提示文案。 */
