@@ -13,11 +13,50 @@
  * 因此 client→host 通信走 webserver 路由（与官方文档推荐、社区已验证的
  * 0.1.2-rc.1 树外双端 bundle 一致），不再是 v6 的 harness.handle / host.call。
  *
- * 版本：v7 — 与 v6 行为一致，仅传输层从动态 invoke 换成 HTTP 路由。
+ * 版本：v8 — v7 语义不变，新增“启用/停用”开关（方案 B，免重启）：
+ * 状态持久化在 <dsh-home>/prompt-optimizer-state.json，可在
+ * 设置 → 插件 → 提示词优化 Tab 切换；停用时 ✨ 关闭、不再调用模型。
  */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 /** 同源优化端点（与 client 半侧保持一致）。 */
 const OPTIMIZE_PATH = '/plugins/prompt-optimizer-plugin/optimize'
+
+/** 同源状态端点：GET 读启用状态；POST 写启用状态。 */
+const STATE_PATH = '/plugins/prompt-optimizer-plugin/state'
+const SET_STATE_PATH = '/plugins/prompt-optimizer-plugin/set-state'
+
+/** 解析 dsh home（env 优先，缺省用用户目录下的 .dsh）。 */
+function dshHome() {
+  if (process.env.DSH_HOME && process.env.DSH_HOME.trim()) return process.env.DSH_HOME.trim()
+  const base = process.env.USERPROFILE || process.env.HOME || '.'
+  return join(base, '.dsh')
+}
+
+const STATE_FILE = join(dshHome(), 'prompt-optimizer-state.json')
+
+/** 读取持久化的启用状态（缺文件/损坏一律视为启用）。 */
+function loadEnabled() {
+  try {
+    if (!existsSync(STATE_FILE)) return true
+    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
+    return raw !== null && typeof raw === 'object' && typeof raw.enabled === 'boolean' ? raw.enabled : true
+  } catch (e) {
+    return true
+  }
+}
+
+/** 写入启用状态（尽力而为：写失败不致命，进程内仍按新值生效）。 */
+function saveEnabled(enabled) {
+  try {
+    mkdirSync(dshHome(), { recursive: true })
+    writeFileSync(STATE_FILE, JSON.stringify({ enabled, savedAt: Date.now() }), 'utf8')
+  } catch (e) {
+    // ignore: in-memory value still applies for this process
+  }
+}
 
 /** 提示词优化专用 system 指令：要求模型直接输出优化后的提示词正文，不做任何解释。 */
 const SYSTEM_PROMPT = [
@@ -230,17 +269,25 @@ function resolveConfig(config) {
 
 export function apply(ctx, config) {
   const opts = resolveConfig(config)
+  let enabled = loadEnabled()
   // 双保险：module 级 inject 之外再用 ctx.inject 等一次，保证注册发生在
   // webServer 服务可用之后（ctx.inject 在服务已就绪时同步执行）。
   ctx.inject(['webServer'], (web) => {
     const server = web.get('webServer')
     if (server === undefined || typeof server.register !== 'function') return
 
-    const dispose = server.register({
+    const disposers = []
+
+    // 优化端点（停用时拒绝调用，避免误触产生模型费用）
+    disposers.push(server.register({
       kind: 'exact',
       path: OPTIMIZE_PATH,
       handler: async (req, res) => {
         try {
+          if (!enabled) {
+            sendJson(res, 200, { ok: false, error: '插件已停用：请到 设置 → 插件 → 提示词优化 开启后再试' })
+            return
+          }
           const payload = await readJsonBody(req)
           const text = payload !== null && typeof payload.text === 'string' ? payload.text : ''
           if (!text.trim()) {
@@ -255,8 +302,35 @@ export function apply(ctx, config) {
           sendJson(res, 500, { ok: false, error: String((e && e.message) || e) })
         }
       },
-    })
+    }))
 
-    ctx.effect(() => dispose, 'prompt-optimizer-plugin:optimize-route')
+    // 读启用状态
+    disposers.push(server.register({
+      kind: 'exact',
+      path: STATE_PATH,
+      handler: async (req, res) => {
+        sendJson(res, 200, { ok: true, enabled })
+      },
+    }))
+
+    // 写启用状态（免重启生效；供 设置 → 插件 → 提示词优化 的开关调用）
+    disposers.push(server.register({
+      kind: 'exact',
+      path: SET_STATE_PATH,
+      handler: async (req, res) => {
+        try {
+          const payload = await readJsonBody(req)
+          const next = payload !== null && payload.enabled === true
+          enabled = next
+          saveEnabled(next)
+          sendJson(res, 200, { ok: true, enabled: next })
+        } catch (e) {
+          sendJson(res, 500, { ok: false, error: String((e && e.message) || e) })
+        }
+      },
+    }))
+
+    ctx.effect(() => () => { for (const d of disposers) { try { d() } catch (e) { /* best effort */ } } },
+      'prompt-optimizer-plugin:routes')
   })
 }

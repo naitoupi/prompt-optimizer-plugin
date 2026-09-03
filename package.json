@@ -1,8 +1,8 @@
 {
   "name": "prompt-optimizer-plugin",
-  "version": "0.7.6",
+  "version": "0.8.0",
   "private": true,
-  "description": "DSH installable bundle (dsh.bundle + dsh.client): ✨ optimize the composer draft with the current model. Static v7, replaces the v6 dynamic hot-load bodies.",
+  "description": "DSH installable bundle (dsh.bundle + dsh.client): ✨ optimize the composer draft with the current model; enable/disable from Settings → Plugins (v8).",
   "type": "module",
   "main": "src/host.js",
   "files": [
@@ -24,7 +24,8 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
       ]
     }
   }
