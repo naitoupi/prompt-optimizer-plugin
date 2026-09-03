@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
     var storeState = {
       enabled: true,
       settings: { reasoningEffort: 'off', maxTokens: 1500, temperature: 0.1 },
+      version: '',
     }
     var stateListeners = new Set()
 
@@ -63,7 +64,7 @@ window.__ModuleLoader__.load({
       stateListeners.forEach(function (fn) { fn(storeState) })
     }
 
-    /** 把 Host 返回的 { enabled, settings } 归一化后写入本地 store。 */
+    /** 把 Host 返回的 { enabled, settings, version } 归一化后写入本地 store。 */
     function applyRemoteState(d) {
       if (d === null || typeof d !== 'object') return
       var settings = d.settings !== null && typeof d.settings === 'object' ? d.settings : {}
@@ -77,6 +78,7 @@ window.__ModuleLoader__.load({
       storeState = {
         enabled: typeof d.enabled === 'boolean' ? d.enabled : storeState.enabled,
         settings: nextSettings,
+        version: typeof d.version === 'string' ? d.version : storeState.version,
       }
       publishState()
     }
@@ -349,7 +351,10 @@ window.__ModuleLoader__.load({
       var fieldHint = { display: 'block', fontSize: '11px', opacity: 0.6, marginTop: '4px', lineHeight: '1.5' }
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', padding: '4px 2px', maxWidth: '760px' } },
-        h('div', { style: { fontWeight: 600, fontSize: '14px' } }, L('Prompt Optimizer（提示词优化）', 'Prompt Optimizer')),
+        h('div', { style: { fontWeight: 600, fontSize: '14px' } },
+          L('Prompt Optimizer（提示词优化）', 'Prompt Optimizer'),
+          h('span', { style: { fontWeight: 400, fontSize: '11px', opacity: 0.6, marginLeft: '8px' } },
+            snap.version ? 'v' + snap.version : '')),
         h('div', { style: { fontSize: '12px', lineHeight: '1.7', opacity: 0.85 } },
           L('在对话输入框工具行提供 ✨ 优化：用当前模型把草稿改写为更清晰、更具体的提示词，支持 ↩ 一键撤销、原文浮动参考。',
             'Adds ✨ Optimize to the composer toolbar: rewrites your draft into a clearer, more specific prompt with the current model; ↩ undo and a floating original-text reference are included.'),

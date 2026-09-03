@@ -20,6 +20,18 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+/** 当前插件版本：从自身 package.json 读取（供设置页展示，不随逻辑写死）。 */
+const PLUGIN_VERSION = (() => {
+  try {
+    const selfDir = fileURLToPath(new URL('.', import.meta.url))
+    const raw = JSON.parse(readFileSync(join(selfDir, '..', 'package.json'), 'utf8'))
+    return typeof raw.version === 'string' && raw.version !== '' ? raw.version : 'unknown'
+  } catch (e) {
+    return 'unknown'
+  }
+})()
 
 /** 同源优化端点（与 client 半侧保持一致）。 */
 const OPTIMIZE_PATH = '/plugins/prompt-optimizer-plugin/optimize'
@@ -377,7 +389,7 @@ export function apply(ctx, config) {
   })
   // 生效指令 = UI 自定义（优先）→ 对应界面语言的内置默认模板
   const promptOf = (lang) => state.prompt !== undefined ? state.prompt : builtinPromptOf(lang)
-  const snapshot = () => ({ enabled: enabledOf(), settings: effectiveOf() })
+  const snapshot = () => ({ enabled: enabledOf(), settings: effectiveOf(), version: PLUGIN_VERSION })
   // 双保险：module 级 inject 之外再用 ctx.inject 等一次，保证注册发生在
   // webServer 服务可用之后（ctx.inject 在服务已就绪时同步执行）。
   ctx.inject(['webServer'], (web) => {
