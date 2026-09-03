@@ -200,7 +200,23 @@ window.__ModuleLoader__.load({
             err
               ? React.createElement('span', {
                   key: 'err',
-                  style: { color: '#e5484d', fontSize: '12px', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                  title: err + '（点击可关闭此提示）',
+                  onClick: () => setErr(null),
+                  style: {
+                    color: '#e5484d',
+                    fontSize: '12px',
+                    lineHeight: '1.45',
+                    maxWidth: '420px',
+                    whiteSpace: 'normal',
+                    wordBreak: 'break-word',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    cursor: 'pointer',
+                    // 最多显示 3 行，多出的部分悬停即可看到全文（原生 title）
+                    display: '-webkit-box',
+                    WebkitLineClamp: '3',
+                    WebkitBoxOrient: 'vertical',
+                  },
                 }, err)
               : null,
           )
