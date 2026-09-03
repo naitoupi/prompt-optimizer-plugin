@@ -2,7 +2,14 @@
   "name": "prompt-optimizer-plugin",
   "version": "0.10.1",
   "private": true,
-  "description": "DSH installable bundle (dsh.bundle + dsh.client): ✨ optimize the composer draft with the current model; Settings tab controls on/off, generation params, and an editable system prompt with reset-to-default (v10).",
+  "description": "DeepSeek Harness (DSH) plugin: ✨ optimize the composer draft with the current model. Installable bundle (dsh.bundle + dsh.client); Settings tab controls on/off, generation params, and an editable system prompt with reset-to-default.",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "prompt-optimizer",
+    "dsh-bundle"
+  ],
   "type": "module",
   "main": "src/host.js",
   "files": [
