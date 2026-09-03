@@ -107,8 +107,8 @@ function normalizePrompt(value) {
   return value
 }
 
-/** 内置优化指令模板（默认原典版，英文；设置页可用「恢复默认指令」回到本版）。 */
-const SYSTEM_PROMPT = [
+/** 内置优化指令模板（双语默认版；规则一致，语言随界面）。设置页「恢复默认指令」回到本版。 */
+const SYSTEM_PROMPT_EN = [
   'You are a professional prompt-optimization expert.',
   'You will be given an original prompt. Rewrite it into a clearer, more specific, and more effective prompt.',
   'Requirements:',
@@ -125,6 +125,34 @@ const SYSTEM_PROMPT = [
   '11) Before rewriting, identify who does what to whom in the original; after rewriting, verify that every action still has the same actor and the same target as the original; if the wording was already clear and correct, return it verbatim instead of paraphrasing;',
   '12) Never output empty content or replies like “cannot optimize/no content”—returning the original verbatim is a valid “no change” result.',
 ].join('\n')
+
+const SYSTEM_PROMPT_ZH = [
+  '你是一位专业的提示词（Prompt）优化专家。',
+  '用户会给你一段原始提示词输入，请把它改写成一个更清晰、更具体、更有效的提示词。',
+  '要求：',
+  '1) 完整保留原意的所有要点，不丢失信息；',
+  '2) 让指令更明确、目标更具体，但不得重排语义——每句话的主语、宾语、修饰关系必须与原文完全一致；只有在不扰乱该关系的前提下才可使用列表、分步骤等结构化表达；',
+  '3) 如果需要，补充必要的约束、输出格式或上下文信息；',
+  '4) 直接输出优化后的提示词正文本身，不要任何解释、前言、后记或代码块围栏；',
+  '5) 使用与原文相同的语言；',
+  '6) 只在确有改进空间时改写：如果原文已经是明确、具体、可执行、无需实质改进的提示词，直接逐字原样输出原文，不要为改而改；',
+  '7) 如果原文不是提示词任务（例如一段普通陈述、闲聊或无法优化的内容），同样原样输出原文，不要凭空编造指令或内容；',
+  '8) 最小化改动：仅修正真正不清楚、不完整或不具体之处，保留用户的措辞、结构与意图，避免无意义的措辞替换；',
+  '9) 相同输入下请保持输出稳定，不要反复更换说法或结构；',
+  '10) 绝不改变语法角色或语义关系：每个动作的主语和宾语、所有修饰语、否定词以及子句顺序都必须原样保持；禁止为了“更顺口”而调换、合并或重排句子成分，禁止新增否定词或改动数量；',
+  '11) 改写前先理清原文“谁对谁做了什么”；改写后核对每个动作的执行者与对象是否与原文一致；若原文已清晰正确，直接逐字返回而不是改写；',
+  '12) 严禁输出空内容或“无法优化/没有内容”之类的话——原样输出原文是合法的“无改动”结果。',
+].join('\n')
+
+/** 语言对应的内置默认指令。 */
+function builtinPromptOf(lang) {
+  return lang === 'en' ? SYSTEM_PROMPT_EN : SYSTEM_PROMPT_ZH
+}
+
+/** 内容是否等于某一语言的内置默认（用于“保存=默认”判定）。 */
+function isBuiltinPrompt(value) {
+  return value === SYSTEM_PROMPT_EN || value === SYSTEM_PROMPT_ZH
+}
 
 /** 按请求语言（'en' | 'zh'）选择提示文案。 */
 function pick(lang, zh, en) {
@@ -347,8 +375,8 @@ export function apply(ctx, config) {
     maxTokens: state.maxTokens !== undefined ? state.maxTokens : rowOpts.maxTokens,
     temperature: state.temperature !== undefined ? state.temperature : rowOpts.temperature,
   })
-  // 生效指令 = UI 自定义（优先）→ 内置默认优化指令
-  const promptOf = () => state.prompt !== undefined ? state.prompt : SYSTEM_PROMPT
+  // 生效指令 = UI 自定义（优先）→ 对应界面语言的内置默认模板
+  const promptOf = (lang) => state.prompt !== undefined ? state.prompt : builtinPromptOf(lang)
   const snapshot = () => ({ enabled: enabledOf(), settings: effectiveOf() })
   // 双保险：module 级 inject 之外再用 ctx.inject 等一次，保证注册发生在
   // webServer 服务可用之后（ctx.inject 在服务已就绪时同步执行）。
@@ -378,7 +406,7 @@ export function apply(ctx, config) {
             sendJson(res, 400, { ok: false, error: pick(lang, '输入为空', 'Input is empty') })
             return
           }
-          const result = await runOptimize(ctx, text, effectiveOf(), promptOf(), lang)
+          const result = await runOptimize(ctx, text, effectiveOf(), promptOf(lang), lang)
           // 业务失败仍以 200 应答：客户端按 { ok: false, error } 展示原因，
           // 避免把可读错误混入 fetch 的 HTTP 异常分支。
           sendJson(res, 200, result)
@@ -426,7 +454,9 @@ export function apply(ctx, config) {
             return
           }
           if (req.method === 'GET') {
-            sendJson(res, 200, { ok: true, prompt: promptOf(), isCustom: state.prompt !== undefined })
+            // GET 用查询参数 ?lang=en|zh 指定要读的默认模板语言（缺省中文）
+            const lang = String(req.url || '').split('?')[1] && /(?:^|&)lang=en(?:&|$)/.test(String(req.url).split('?')[1]) ? 'en' : 'zh'
+            sendJson(res, 200, { ok: true, prompt: promptOf(lang), isCustom: state.prompt !== undefined })
             return
           }
           const payload = await readJsonBody(req)
@@ -435,17 +465,16 @@ export function apply(ctx, config) {
           if (payload.reset === true) {
             delete state.prompt
             saveState(enabledOf(), effectiveOf(), state.prompt)
-            sendJson(res, 200, { ok: true, prompt: promptOf(), isCustom: false })
+            sendJson(res, 200, { ok: true, prompt: promptOf(lang), isCustom: false })
             return
           }
           const next = normalizePrompt(payload.prompt)
           if (next === null) throw new Error(pick(lang, '指令内容不能为空（最多 32 KiB）', 'The instruction must not be empty (max 32 KiB)'))
-          if (next === SYSTEM_PROMPT) {
-            // 与内置默认完全相同 → 视为未自定义：清掉覆盖，保持“默认版”状态
-            // （修复：恢复默认后即使再点“保存指令”，也不该变成“自定义版本”）
+          if (isBuiltinPrompt(next)) {
+            // 与任一语言的内置默认完全相同 → 视为未自定义：清掉覆盖，保持“默认版”状态
             delete state.prompt
             saveState(enabledOf(), effectiveOf(), state.prompt)
-            sendJson(res, 200, { ok: true, prompt: SYSTEM_PROMPT, isCustom: false })
+            sendJson(res, 200, { ok: true, prompt: promptOf(lang), isCustom: false })
             return
           }
           state.prompt = next

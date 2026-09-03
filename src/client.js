@@ -195,7 +195,8 @@ window.__ModuleLoader__.load({
 
       function loadPromptOnce() {
         if (promptText !== null) return
-        fetch(PROMPT_URL).then(function (res) { return res.json() }).then(function (d) {
+        // 带语言标记读取：中文界面读中文默认模板，英文界面读英文模板
+        fetch(PROMPT_URL + '?lang=' + uiLang()).then(function (res) { return res.json() }).then(function (d) {
           if (d !== null && typeof d === 'object' && d.ok === true && typeof d.prompt === 'string') {
             setPromptText(d.prompt)
             setPromptDraft(d.prompt)
