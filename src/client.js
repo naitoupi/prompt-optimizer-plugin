@@ -246,15 +246,19 @@ window.__ModuleLoader__.load({
           h('div', { style: { fontWeight: 600, fontSize: '13px' } }, '生成参数（点击优化时生效）'),
           h('div', {},
             h('label', { style: fieldLabel }, '思考强度（reasoningEffort）'),
+            // colorScheme:'dark' 让原生下拉弹窗按深色渲染；option 显式给出
+            // 深底亮字，避免深色主题下选项近乎白底白字"看不见"的 bug
+            // (dark color-scheme plus explicit option colors keep the native
+            // dropdown readable on dark themes)
             h('select', {
               value: effort,
               onChange: function (e) { setEffort(e.target.value) },
-              style: { ...inputStyle, cursor: 'pointer' },
+              style: { ...inputStyle, cursor: 'pointer', colorScheme: 'dark' },
             },
-              h('option', { value: 'off' }, 'off — 关闭思考（最快，推荐）'),
-              h('option', { value: 'low' }, 'low — 轻度思考'),
-              h('option', { value: 'high' }, 'high — 深度思考（更慢）'),
-              h('option', { value: 'max' }, 'max — 最强思考（最慢）'),
+              h('option', { value: 'off', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, 'off — 关闭思考（最快，推荐）'),
+              h('option', { value: 'low', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, 'low — 轻度思考'),
+              h('option', { value: 'high', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, 'high — 深度思考（更慢）'),
+              h('option', { value: 'max', style: { background: 'var(--dsw-specific-menu, #1f1f1f)', color: 'var(--dsw-alias-label-primary, #eee)' } }, 'max — 最强思考（最慢）'),
             ),
             h('span', { style: fieldHint }, '提示词改写通常不需要深度推理；off 速度快、额度不会被思考耗尽。'),
           ),

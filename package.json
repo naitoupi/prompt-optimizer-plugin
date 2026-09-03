@@ -1,6 +1,6 @@
 {
   "name": "prompt-optimizer-plugin",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "DSH installable bundle (dsh.bundle + dsh.client): ✨ optimize the composer draft with the current model; enable/disable + generation params from Settings → Plugins (v9).",
   "type": "module",
