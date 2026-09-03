@@ -415,6 +415,14 @@ export function apply(ctx, config) {
           }
           const next = normalizePrompt(payload.prompt)
           if (next === null) throw new Error('指令内容不能为空（最多 32 KiB）')
+          if (next === SYSTEM_PROMPT) {
+            // 与内置默认完全相同 → 视为未自定义：清掉覆盖，保持“默认版”状态
+            // （修复：恢复默认后即使再点“保存指令”，也不该变成“自定义版本”）
+            delete state.prompt
+            saveState(enabledOf(), effectiveOf(), state.prompt)
+            sendJson(res, 200, { ok: true, prompt: SYSTEM_PROMPT, isCustom: false })
+            return
+          }
           state.prompt = next
           saveState(enabledOf(), effectiveOf(), state.prompt)
           sendJson(res, 200, { ok: true, prompt: state.prompt, isCustom: true })

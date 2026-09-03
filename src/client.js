@@ -139,12 +139,25 @@ window.__ModuleLoader__.load({
       var busyPair = React.useState(false)
       var busy = busyPair[0]
       var setBusy = busyPair[1]
-      var msgPair = React.useState(null)
-      var msg = msgPair[0]
-      var setMsg = msgPair[1]
-      var errPair = React.useState(null)
-      var error = errPair[0]
-      var setError = errPair[1]
+      // 分区反馈：开关区 / 生成参数区 / 优化指令区 各自在按钮下方显示提示
+      var toggleMsgPair = React.useState(null)
+      var toggleMsg = toggleMsgPair[0]
+      var setToggleMsg = toggleMsgPair[1]
+      var toggleErrPair = React.useState(null)
+      var toggleErr = toggleErrPair[0]
+      var setToggleErr = toggleErrPair[1]
+      var paramsMsgPair = React.useState(null)
+      var paramsMsg = paramsMsgPair[0]
+      var setParamsMsg = paramsMsgPair[1]
+      var paramsErrPair = React.useState(null)
+      var paramsErr = paramsErrPair[0]
+      var setParamsErr = paramsErrPair[1]
+      var promptMsgPair = React.useState(null)
+      var promptMsg = promptMsgPair[0]
+      var setPromptMsg = promptMsgPair[1]
+      var promptErrPair = React.useState(null)
+      var promptErr = promptErrPair[0]
+      var setPromptErr = promptErrPair[1]
 
       // 默认优化指令展示（懒加载：首次点“显示”才拉取）
       var showPromptPair = React.useState(false)
@@ -190,31 +203,31 @@ window.__ModuleLoader__.load({
       function savePrompt() {
         if (promptText === null) { loadPromptOnce(); return }
         if (typeof promptDraft !== 'string' || promptDraft.trim() === '') {
-          setError('指令内容不能为空')
+          setPromptErr('指令内容不能为空')
           return
         }
-        return busyWrap(function () {
+        return runTask(function () {
           return postJson(PROMPT_URL, { prompt: promptDraft }).then(function (d) {
             setPromptText(d.prompt)
             setPromptDraft(d.prompt)
             setPromptIsCustom(d.isCustom === true)
-            setMsg('优化指令已保存并即时生效')
+            setPromptMsg('优化指令已保存并即时生效')
             return d
           })
-        })
+        }, setPromptMsg, setPromptErr)
       }
 
       function resetPrompt() {
         if (promptText === null) { loadPromptOnce(); return }
-        return busyWrap(function () {
+        return runTask(function () {
           return postJson(PROMPT_URL, { reset: true }).then(function (d) {
             setPromptText(d.prompt)
             setPromptDraft(d.prompt)
             setPromptIsCustom(false)
-            setMsg('已恢复默认优化指令')
+            setPromptMsg('已恢复默认优化指令')
             return d
           })
-        })
+        }, setPromptMsg, setPromptErr)
       }
 
       function copyPrompt() {
@@ -246,57 +259,57 @@ window.__ModuleLoader__.load({
         setTempStr(String(settings.temperature))
       }, [settings.reasoningEffort, settings.maxTokens, settings.temperature])
 
-      function busyWrap(task) {
+      function runTask(task, setM, setE) {
         setBusy(true)
-        setError(null)
-        setMsg(null)
+        setM && setM(null)
+        setE && setE(null)
         return task()
           .then(function (d) { return d })
           .catch(function (e) {
-            setError(String((e && e.message) || e))
+            if (setE) setE(String((e && e.message) || e))
             return null
           })
           .then(function (result) { setBusy(false); return result })
       }
 
       function flip() {
-        return busyWrap(function () {
+        return runTask(function () {
           return postJson(SET_STATE_URL, { enabled: !enabled }).then(function (d) {
             applyRemoteState(d)
-            setMsg('已生效（无需重启）：' + (d.enabled === true ? '✨ 优化已恢复' : '✨ 优化已关闭，聊天输入框中的按钮将隐藏'))
+            setToggleMsg('已生效（无需重启）：' + (d.enabled === true ? '✨ 优化已恢复' : '✨ 优化已关闭，聊天输入框中的按钮将隐藏'))
             return d
           })
-        })
+        }, setToggleMsg, setToggleErr)
       }
 
       function saveSettings() {
         var tokens = parseInt(tokensStr, 10)
         var temp = parseFloat(tempStr)
         if (!Number.isFinite(tokens) || tokens < 64) {
-          setError('最大输出 tokens 需为 ≥64 的整数')
+          setParamsErr('最大输出 tokens 需为 ≥64 的整数')
           return
         }
         if (!Number.isFinite(temp) || temp < 0 || temp > 2) {
-          setError('温度需在 0 ~ 2 之间')
+          setParamsErr('温度需在 0 ~ 2 之间')
           return
         }
-        return busyWrap(function () {
+        return runTask(function () {
           return postJson(SETTINGS_URL, { reasoningEffort: effort, maxTokens: tokens, temperature: temp }).then(function (d) {
             applyRemoteState(d)
-            setMsg('生成参数已保存并立即生效')
+            setParamsMsg('生成参数已保存并立即生效')
             return d
           })
-        })
+        }, setParamsMsg, setParamsErr)
       }
 
       function resetSettings() {
-        return busyWrap(function () {
+        return runTask(function () {
           return postJson(SETTINGS_URL, { reset: true }).then(function (d) {
             applyRemoteState(d)
-            setMsg('已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1）')
+            setParamsMsg('已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1）')
             return d
           })
-        })
+        }, setParamsMsg, setParamsErr)
       }
 
       var rowStyle = {
@@ -324,6 +337,12 @@ window.__ModuleLoader__.load({
             type: 'button', disabled: busy, onClick: flip,
             style: busy ? { ...rowStyle, opacity: 0.55, cursor: 'wait' } : rowStyle,
           }, busy ? '处理中…' : (enabled ? '停用插件' : '启用插件'))),
+        toggleMsg
+          ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } }, toggleMsg)
+          : null,
+        toggleErr
+          ? h('div', { style: { color: '#e5484d', fontSize: '12px', maxWidth: '560px', lineHeight: '1.5' } }, toggleErr)
+          : null,
 
         h('div', {
           style: { borderTop: '1px solid rgba(128,128,128,0.25)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -375,6 +394,12 @@ window.__ModuleLoader__.load({
               style: rowStyle,
             }, '恢复默认'),
           ),
+          paramsMsg
+            ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } }, paramsMsg)
+            : null,
+          paramsErr
+            ? h('div', { style: { color: '#e5484d', fontSize: '12px', lineHeight: '1.5' } }, paramsErr)
+            : null,
         ),
 
         h('div', {
@@ -416,16 +441,15 @@ window.__ModuleLoader__.load({
                   }, busy ? '保存中…' : '保存指令'),
                   h('button', { type: 'button', disabled: busy, onClick: resetPrompt, style: rowStyle }, '恢复默认指令'),
                 ),
+                promptMsg
+                  ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } }, promptMsg)
+                  : null,
+                promptErr
+                  ? h('div', { style: { color: '#e5484d', fontSize: '12px', lineHeight: '1.5' } }, promptErr)
+                  : null,
               )
             : null,
         ),
-
-        msg
-          ? h('div', { style: { color: '#3f9e5f', fontSize: '12px' } }, msg)
-          : null,
-        error
-          ? h('div', { style: { color: '#e5484d', fontSize: '12px', maxWidth: '560px', lineHeight: '1.5' } }, error)
-          : null,
       )
     }
 
