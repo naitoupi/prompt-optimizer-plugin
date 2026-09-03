@@ -131,10 +131,22 @@ window.__ModuleLoader__.load({
           const [err, setErr] = React.useState(null)
           const [undoable, setUndoable] = React.useState(hasHistory(sessionId))
           React.useEffect(() => subscribe(sessionId, () => setUndoable(hasHistory(sessionId))), [sessionId])
-          // 输入框被清空 → 清空该会话优化历史：撤销按钮与原文参考区一并消失
-          // (Clearing the draft clears the session history, so Undo and the reference dock both disappear)
+          // 发送（phase 离开 plain）→ 清掉上次失败留下的红字提醒，避免“模型未返回
+          // 有效内容”一直残留在输入工具行旁
+          // (Once the draft enters the submit pipeline the stale error text clears)
+          const phase = useInput((s) => s.phase)
           React.useEffect(() => {
-            if (typeof draft === 'string' && draft.trim() === '') clear(sessionId)
+            if (phase !== 'plain') setErr(null)
+          }, [phase])
+          // 输入框被清空 → 清空该会话优化历史：撤销按钮与原文参考区一并消失；
+          // 红字提醒也一并消失
+          // (Clearing the draft clears the session history, so Undo and the reference
+          // dock both disappear; the stale error text clears too)
+          React.useEffect(() => {
+            if (typeof draft === 'string' && draft.trim() === '') {
+              clear(sessionId)
+              setErr(null)
+            }
           }, [draft])
           const draftEmpty = !(typeof draft === 'string' && draft.trim().length > 0)
           const canOptimize = !busy && !draftEmpty

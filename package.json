@@ -1,6 +1,6 @@
 {
   "name": "prompt-optimizer-plugin",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "description": "DSH installable bundle (dsh.bundle + dsh.client): ✨ optimize the composer draft with the current model. Static v7, replaces the v6 dynamic hot-load bodies.",
   "type": "module",
