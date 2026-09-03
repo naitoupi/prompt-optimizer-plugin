@@ -1,0 +1,9 @@
+# prompt-optimizer-plugin — bundle layer for the dsh profile.
+#
+# Mounts the Host half as one Loader row. The browser half needs no row of its
+# own: the client module system scans enabled Loader entries for packages that
+# declare `dsh.client` and export `./client`, then serves that bundle to the
+# page (dsh-client-modules handles /plugins/prompt-optimizer-plugin/client.js).
+- insert:
+    - id: prompt-optimizer
+      name: prompt-optimizer-plugin

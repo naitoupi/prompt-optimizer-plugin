@@ -1,0 +1,31 @@
+{
+  "name": "prompt-optimizer-plugin",
+  "version": "0.7.0",
+  "private": true,
+  "description": "DSH installable bundle (dsh.bundle + dsh.client): ✨ optimize the composer draft with the current model. Static v7, replaces the v6 dynamic hot-load bodies.",
+  "type": "module",
+  "main": "src/host.js",
+  "files": [
+    "src",
+    "cordis.patch.yml"
+  ],
+  "exports": {
+    ".": "./src/host.js",
+    "./client": "./src/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
