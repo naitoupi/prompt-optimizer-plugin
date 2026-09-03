@@ -29,6 +29,9 @@ const STATE_PATH = '/plugins/prompt-optimizer-plugin/state'
 const SET_STATE_PATH = '/plugins/prompt-optimizer-plugin/set-state'
 const SETTINGS_PATH = '/plugins/prompt-optimizer-plugin/settings'
 
+/** 同源只读端点：返回内置的默认优化指令（system prompt）。 */
+const PROMPT_PATH = '/plugins/prompt-optimizer-plugin/prompt'
+
 /** 解析 dsh home（env 优先，缺省用用户目录下的 .dsh）。 */
 function dshHome() {
   if (process.env.DSH_HOME && process.env.DSH_HOME.trim()) return process.env.DSH_HOME.trim()
@@ -367,6 +370,15 @@ export function apply(ctx, config) {
         } catch (e) {
           sendJson(res, 500, { ok: false, error: String((e && e.message) || e) })
         }
+      },
+    }))
+
+    // 只读：当前内置的默认优化指令（供设置页展示/复制，单一来源在此）
+    disposers.push(server.register({
+      kind: 'exact',
+      path: PROMPT_PATH,
+      handler: async (req, res) => {
+        sendJson(res, 200, { ok: true, prompt: SYSTEM_PROMPT })
       },
     }))
 

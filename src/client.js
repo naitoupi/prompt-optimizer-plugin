@@ -32,6 +32,7 @@ window.__ModuleLoader__.load({
     var STATE_URL = '/plugins/prompt-optimizer-plugin/state'
     var SET_STATE_URL = '/plugins/prompt-optimizer-plugin/set-state'
     var SETTINGS_URL = '/plugins/prompt-optimizer-plugin/settings'
+    var PROMPT_URL = '/plugins/prompt-optimizer-plugin/prompt'
 
     // ── 插件状态 store（页面内共享，实时联动）──
     // 内容 = Host 的 state 快照：{ enabled, settings: { reasoningEffort, maxTokens, temperature } }
@@ -144,6 +145,42 @@ window.__ModuleLoader__.load({
       var errPair = React.useState(null)
       var error = errPair[0]
       var setError = errPair[1]
+
+      // 默认优化指令展示（懒加载：首次点“显示”才拉取）
+      var showPromptPair = React.useState(false)
+      var showPrompt = showPromptPair[0]
+      var setShowPrompt = showPromptPair[1]
+      var promptPair = React.useState(null)
+      var promptText = promptPair[0]
+      var setPromptText = promptPair[1]
+      var copyPair = React.useState('')
+      var copyMsg = copyPair[0]
+      var setCopyMsg = copyPair[1]
+
+      function togglePrompt() {
+        if (showPrompt) { setShowPrompt(false); return }
+        setShowPrompt(true)
+        if (promptText !== null) return
+        fetch(PROMPT_URL).then(function (res) { return res.json() }).then(function (d) {
+          setPromptText(d !== null && typeof d === 'object' && d.ok === true && typeof d.prompt === 'string'
+            ? d.prompt : '（读取失败，请确认插件已在运行）')
+        }).catch(function () {
+          setPromptText('（读取失败，请确认插件已在运行）')
+        })
+      }
+
+      function copyPrompt() {
+        if (typeof promptText !== 'string') return
+        function fallback() { setCopyMsg('复制失败') }
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(promptText).then(function () {
+            setCopyMsg('已复制')
+            setTimeout(function () { setCopyMsg('') }, 2000)
+          }).catch(fallback)
+        } else {
+          fallback()
+        }
+      }
 
       var effortPair = React.useState(settings.reasoningEffort)
       var effort = effortPair[0]
@@ -290,6 +327,35 @@ window.__ModuleLoader__.load({
               style: rowStyle,
             }, '恢复默认'),
           ),
+        ),
+
+        h('div', {
+          style: { borderTop: '1px solid rgba(128,128,128,0.25)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' },
+        },
+          h('div', { style: { fontWeight: 600, fontSize: '13px' } }, '默认优化指令（system prompt）'),
+          h('div', { style: { fontSize: '12px', lineHeight: '1.7', opacity: 0.85 } },
+            '以下为点击 ✨ 优化时，模型收到的内置指令（由插件内置，暂不支持编辑）：'),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+            h('button', { type: 'button', onClick: togglePrompt, style: rowStyle },
+              showPrompt ? '收起' : '显示'),
+            promptText !== null
+              ? h('button', { type: 'button', onClick: copyPrompt, style: rowStyle }, '复制')
+              : null,
+            copyMsg
+              ? h('span', { style: { color: '#3f9e5f', fontSize: '12px' } }, copyMsg)
+              : null,
+          ),
+          showPrompt
+            ? h('pre', {
+                style: {
+                  margin: '0', padding: '10px 12px', borderRadius: '8px',
+                  border: '1px solid rgba(128,128,128,0.3)', boxSizing: 'border-box',
+                  background: 'rgba(128,128,128,0.06)', color: 'inherit',
+                  fontSize: '12px', lineHeight: '1.6', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  maxHeight: '320px', overflowY: 'auto',
+                },
+              }, promptText)
+            : null,
         ),
 
         msg
