@@ -80,7 +80,51 @@ function defaultModelOf(ctx) {
   return null
 }
 
-/** 核心优化逻辑：用选中模型改写文本。空返回（finish 成功但无 text-delta）时给出可操作的提示。 */
+/** 单次流式改写：累加正文与思考文本，记录 finish 原因。 */
+async function streamOnce(llm, selection, text, maxTokens) {
+  let out = ''
+  let reasoning = ''
+  let finishKind = null
+  let finishFailure = null
+  const stream = llm.stream({
+    provider: selection.provider,
+    model: selection.model,
+    maxTokens,
+    temperature: 0.3,
+    system: SYSTEM_PROMPT,
+    messages: [{
+      id: 'prompt-opt-' + Math.random().toString(36).slice(2),
+      role: 'user',
+      content: [{ type: 'text', text }],
+      source: { kind: 'plugin', plugin: 'prompt-optimizer' },
+    }],
+  })
+  for await (const chunk of stream) {
+    if (chunk.type === 'text-delta') {
+      out += chunk.text
+    } else if (chunk.type === 'reasoning-delta') {
+      reasoning += chunk.text
+    } else if (chunk.type === 'finish') {
+      const reason = chunk.reason
+      finishKind = reason && reason.kind ? reason.kind : null
+      if (reason && (reason.kind === 'error' || reason.kind === 'aborted')) {
+        finishFailure = reason.failure
+      }
+    }
+  }
+  return { out, reasoning, finishKind, finishFailure }
+}
+
+/**
+ * 核心优化逻辑：用选中模型改写文本。
+ * 实测发现两类“空返回”：
+ *  1) finish=max-tokens 且零正文 —— 模型把输出额度全花在思考/非正文产出上
+ *     （deepseek 系会把思考计入输出 token），额度耗尽前正文还没开始；
+ *  2) finish=stop 且零正文 —— 草稿只是陈述、缺少可执行的“请…”指令时，
+ *     模型选择不产出。
+ * 处理：max-tokens 空返回自动扩容重试一次；最终失败按真实 finish 原因给出
+ * 可操作的提示（不再笼统报“未返回有效内容”）。
+ */
 async function runOptimize(ctx, text) {
   const llm = ctx.get('llm')
   if (llm === undefined || typeof llm.stream !== 'function') {
@@ -91,45 +135,41 @@ async function runOptimize(ctx, text) {
     return { ok: false, error: '无法确定当前模型' }
   }
   try {
-    let out = ''
-    let finishKind = null
-    const stream = llm.stream({
-      provider: selection.provider,
-      model: selection.model,
-      maxTokens: 1024,
-      temperature: 0.3,
-      system: SYSTEM_PROMPT,
-      messages: [{
-        id: 'prompt-opt-' + Math.random().toString(36).slice(2),
-        role: 'user',
-        content: [{ type: 'text', text }],
-        source: { kind: 'plugin', plugin: 'prompt-optimizer' },
-      }],
-    })
-    for await (const chunk of stream) {
-      if (chunk.type === 'text-delta') {
-        out += chunk.text
-      } else if (chunk.type === 'finish') {
-        const reason = chunk.reason
-        finishKind = reason && reason.kind ? reason.kind : null
-        if (reason && (reason.kind === 'error' || reason.kind === 'aborted')) {
-          const fail = reason.failure
-          return { ok: false, error: (fail && fail.message) || '模型调用失败' }
+    // 首轮额度放大到 2048（思考占用常见）；max-tokens 空返回时第二轮 8192。
+    const attempts = [
+      { maxTokens: 2048 },
+      { maxTokens: 8192 },
+    ]
+    for (let i = 0; i < attempts.length; i++) {
+      const attempt = attempts[i]
+      const r = await streamOnce(llm, selection, text, attempt.maxTokens)
+      const optimized = r.out.trim()
+      if (optimized) return { ok: true, text: optimized }
+      if (r.finishKind === 'error' || r.finishKind === 'aborted') {
+        const fail = r.finishFailure
+        return { ok: false, error: (fail && fail.message) || '模型调用失败' }
+      }
+      if (r.finishKind === 'max-tokens' && i < attempts.length - 1) {
+        // 额度耗尽且零正文：扩容重试（模型思考吃掉了全部输出额度）
+        continue
+      }
+      // 最终失败：按真实原因给提示
+      const modelTag = `（模型：${selection.provider}/${selection.model}，finish=${r.finishKind ?? 'unknown'}）`
+      if (r.finishKind === 'max-tokens') {
+        return {
+          ok: false,
+          error: '模型把输出额度全花在了思考上、没来得及输出正文（finish=max-tokens'
+            + (r.reasoning.trim() ? `，本次思考约 ${r.reasoning.length} 字符` : '')
+            + '）。已自动扩容到 8192 重试仍失败：请把草稿改成含明确任务的提示词（“请帮我…”“改写成…”）后再试。' + modelTag,
         }
       }
-    }
-    const optimized = out.trim()
-    if (!optimized) {
-      // 实测：当草稿只是陈述、没有可执行的“请…”指令（或内容被模型判定无
-      // 任务可优化）时，模型会以成功 finish 返回空文本。提示用户补充目标
-      // 即可，而不是让他们以为功能坏了。
+      // finish=stop（或未知）且零正文：无指令/无任务类草稿
       return {
         ok: false,
-        error: '模型未返回有效内容：这段草稿缺少可执行的指令或目标（如“请帮我…”“改写成…”）。请在草稿中补充任务要求后重试，或把光标移到其他草稿上再点优化。'
-          + `（模型：${selection.provider}/${selection.model}，finish=${finishKind ?? 'unknown'}）`,
+        error: '模型未返回有效内容：这段草稿缺少可执行的指令或目标（如“请帮我…”“改写成…”）。请在草稿中补充任务要求后重试，或把光标移到其他草稿上再点优化。' + modelTag,
       }
     }
-    return { ok: true, text: optimized }
+    return { ok: false, error: '模型未返回有效内容' }
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) }
   }
