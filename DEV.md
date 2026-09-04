@@ -112,6 +112,7 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 | 版本 | 变更 |
 |------|------|
+| v0.11.5 | 修复"原生 LLM 正常、公司代理报错"：模型能力目录无 reasoning 声明时（如 ccr/bot-builder/deepseek-v4-flash），显式传 reasoningEffort（含 off）会被 DSH 以 UNSUPPORTED_REASONING_EFFORT 拒绝——调用前用 llm.resolveCallConfig() 预检模型是否支持配置的推理等级，不支持则自动不传该参数、回退部署默认行为 |
 | v0.11.4 | 修复版本号未显示：/state、/set-state、/settings 三个响应手工拼字段时漏带 version（snapshot 已含但未返回）——补齐返回 |
 | v0.11.3 | 设置页标题旁显示当前版本号（Host 从自身 package.json 读取并随 /state 返回；README 增加版本查看说明） |
 | v0.11.2 | 内置指令双语化：中/英各一套默认模板（规则一致，随界面语言选择）；GET /prompt 支持 ?lang=；"保存=默认"判定兼容两语言模板 |

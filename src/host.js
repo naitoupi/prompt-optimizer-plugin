@@ -278,6 +278,36 @@ function essentiallySame(optimized, text) {
 }
 
 /**
+ * 预检指定推理等级是否为当前模型所支持；不支持时回退 undefined（调用时不传
+ * reasoningEffort），让适配器按模型默认行为处理。某些部署（如公司代理 ccr 下的
+ * bot-builder/deepseek-v4-flash）的模型能力目录没有 reasoning 声明，显式传
+ * low/off 都会被 DSH 以 UNSUPPORTED_REASONING_EFFORT 拒绝，导致"原生 LLM 正常、
+ * 公司代理报错"的差异。
+ * (Preflight the requested reasoning effort against the exact model capability.
+ * When unsupported, fall back to undefined so the request carries no
+ * reasoningEffort and the adapter uses the model default — explicit low/off would
+ * be rejected by DSH as UNSUPPORTED_REASONING_EFFORT on deployments whose catalog
+ * declares no reasoning levels, e.g. ccr/bot-builder via the office proxy)
+ */
+async function resolveReasoningEffort(llm, selection, requested) {
+  if (requested === undefined) return undefined
+  try {
+    await llm.resolveCallConfig({
+      provider: selection.provider,
+      model: selection.model,
+      reasoningEffort: requested,
+    })
+    return requested
+  } catch (e) {
+    const msg = String((e && e.message) || e)
+    if (/UNSUPPORTED_REASONING_EFFORT|does not support reasoning effort/i.test(msg)) {
+      return undefined
+    }
+    throw e
+  }
+}
+
+/**
  * 核心优化逻辑：用选中模型改写文本。
  * 用可配置的推理强度/额度/温度执行；遇 finish=max-tokens 空返回时自动扩容
  * 重试一次；最终失败按真实 finish 原因给出可操作提示。
@@ -291,7 +321,10 @@ async function runOptimize(ctx, text, opts, systemPrompt, lang) {
   if (selection === null) {
     return { ok: false, error: pick(lang, '无法确定当前模型', 'Unable to determine the current model') }
   }
-  const reasoningEffort = opts.reasoningEffort
+  // 先预检模型是否支持配置的推理等级；不支持则回退为不传参，避免模型调用直接失败
+  // (Preflight the configured reasoning effort against the exact model; when
+  // unsupported, omit the parameter so the call still succeeds)
+  const reasoningEffort = await resolveReasoningEffort(llm, selection, opts.reasoningEffort)
   const maxTokens = opts.maxTokens
   const temperature = opts.temperature
   try {
