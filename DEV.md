@@ -19,7 +19,7 @@ v7 起把「动态热加载双端插件（cordis_define / cordis_run）」改造
 
 - **启用/停用**：停用后对话输入框不再显示 ✨ 按钮，Host 也拒绝优化调用（不会产生模型费用）；
 - **生成参数**：思考强度（off/low/high/max）、最大输出 tokens、温度——点「保存参数」立即生效；
-- 「恢复默认」= off / 1500 / 0.3；
+- 「恢复默认」= off / 1500 / 0.1；
 - 全部**免重启**；状态持久化在 `~/.dsh/prompt-optimizer-state.json`；
 - 已经在其他标签页打开的对话页面，刷新一次即可同步状态。
 
@@ -124,6 +124,7 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 | 版本 | 变更 |
 |------|------|
+| v0.12.1 | 稳定性修复：`temperature` 默认 0.3→0.1。链式/重复优化实测（同输入连跑 5 次得到 5 个不同结果，长度 113~175）表明 0.3 的方差过大；指令已强制"诊断缺项再补全"，低温不会再退化成照抄。链式收敛性与语义保持经 5 组实验验证（否定词/数量/模态零漂移，格式无 markdown 泄漏，中文 2~3 轮、英文 3 轮进入不动点） |
 | v0.12.0 | 合并 v0.11.6 + v0.11.7 为一次功能发布：**设置入口迁移**到左侧导航一级条目（见 v0.11.6 行）；**修复"点了优化和没点区别不大"**（见 v0.11.7 行）；补回"无任务草稿原样返回"规则（修 v0.11.7 重写时引入的回归：`hello` 曾被改写成一句回应）；规则 8 补"每项要求只出现一次"（修同义反复）；设置页新增「推荐用法：什么都不用改」说明卡，写明推荐默认值与两个恢复默认按钮的去处；README 精简 |
 | v0.11.7 | 修复"点了优化和没点区别不大"：内置指令重写（删除 5 条"逐字返回/最小化改动"逃生条款，改为"读懂意图 → 诊断 A~E 缺项 → 只补缺的"正向任务，新增"不得比原文更短"防信息丢失）；`temperature` 默认 0.1→0.3（0.1 使模型倾向照抄）；新增 `minorChangeRatio`（默认 0.95）+ `diffLevel()`/`editDistance()`：只删一个字或改标点这类伪改动不再替换草稿，客户端按 `minorChange` 如实提示 |
 | v0.11.6 | 设置入口迁移：由「设置 → 插件 → 提示词优化」标签页改为设置左侧导航的一级条目（`settings.section`，id `prompt-optimizer`，order 35 → 排在「插件」之后），`settings.plugins.tab` 注册与 `dsh.client.inject` 的 ui-settings-plugins 依赖一并移除 |
@@ -156,7 +157,7 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 ## 可调参数（可选）
 
 默认值面向“改写要看得出来”：`reasoningEffort: off`（提示词改写不做深度推理）、
-`maxTokens: 1500`、`temperature: 0.3`（0.1 会让模型倾向照抄原文）、
+`maxTokens: 1500`、`temperature: 0.1`（同一输入重复优化应给出同一结果；改写力度由指令约束，不靠提高温度）、
 `minorChangeRatio: 0.95`（相似度达到该值即视为“几乎没改”，见上文行为约定）。
 
 **优先在设置页调整**（设置 → 提示词优化，UI 保存后立即生效并持久化）。
@@ -180,7 +181,22 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 ## 开发与调试
 
+> ⚠️ **不要用 Windows PowerShell 5.1 改写 `package.json` 等文本文件。**
+> `Set-Content -Encoding UTF8` 与 `Out-File -Encoding utf8` 都会写入 UTF-8 BOM（`EF BB BF`），
+> 而 DSH 的 profile 加载器对每个 bundle 的 `package.json` 直接
+> `JSON.parse(readFileSync(path, 'utf8'))`、**不去除 BOM**，于是 `dsh web` 启动即失败：
+>
+> ```
+> SyntaxError: Unexpected token '﻿', "﻿{ "nam"... is not valid JSON
+>     at loadProfileDirectory (.../dsh-app-boot/lib/index.js:851)
+> ```
+>
+> 用编辑器改，或用 .NET 的 `[System.Text.UTF8Encoding]::new($false)` 写，
+> 或改用 PowerShell 7+（其 `utf8` 无 BOM）。仓库根的 `.editorconfig` 已声明 `charset = utf-8`。
+> 排查方式：文件首三字节是否为 `EF BB BF`；`node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"` 可复现。
+
 - 改 `src/host.js` 或 `src/client.js` 后：`dsh plugin --profile web add ./prompt-optimizer-plugin` 重装一次
   （link 安装下即更新链接目标），然后重启 `dsh web`。
 - Host 路由可直测：`curl -X POST http://127.0.0.1:3080/plugins/prompt-optimizer-plugin/optimize -H 'content-type: application/json' -d '{"text":"帮我写个函数"}'`
 - 浏览器端日志可在 DevTools 里看 `window.__ModuleLoader__` 装载与 fetch 调用。
+- `src/host.js` 侧改动**必须重启 `dsh web`**（Host 模块常驻内存）；`src/client.js` 改动刷新页面即可。

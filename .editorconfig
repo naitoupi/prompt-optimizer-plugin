@@ -1,0 +1,21 @@
+# Keep every text file BOM-free.
+#
+# Why this is load-bearing: the DSH profile loader parses each bundle's
+# package.json with JSON.parse(readFileSync(path, 'utf8')) and does NOT strip a
+# UTF-8 BOM, so a BOM makes `dsh web` fail at startup with:
+#   SyntaxError: Unexpected token '', "{ "name"... is not valid JSON
+#
+# Writing with Windows PowerShell 5.1 does this silently: Set-Content -Encoding
+# UTF8 and Out-File -Encoding utf8 both emit EF BB BF. Use an editor, or write
+# with .NET via [System.Text.UTF8Encoding]::new($false), or use PowerShell 7+
+# where utf8 is BOM-less. Never rewrite package.json with 5.1 Set-Content.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+trim_trailing_whitespace = false

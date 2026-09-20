@@ -266,7 +266,7 @@ async function streamOnce(llm, selection, text, maxTokens, temperature, reasonin
 const DEFAULTS = Object.freeze({
   reasoningEffort: 'off',   // 提示词改写不需要深度推理：off 最快且不会耗尽额度
   maxTokens: 1500,          // 关掉思考后足够覆盖一次高质量改写
-  temperature: 0.3,         // 改写任务而非抽取任务：0.1 会让模型倾向照抄原文
+  temperature: 0.1,         // 同一输入重复优化应给出同一结果；改写力度由指令约束，不靠提高温度
   minorChangeRatio: 0.95,   // 相似度 ≥ 该值视为“几乎没改”，见 diffLevel
 })
 

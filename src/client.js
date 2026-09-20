@@ -55,7 +55,7 @@ window.__ModuleLoader__.load({
     // 内容 = Host 的 state 快照：{ enabled, settings: { reasoningEffort, maxTokens, temperature } }
     var storeState = {
       enabled: true,
-      settings: { reasoningEffort: 'off', maxTokens: 1500, temperature: 0.3 },
+      settings: { reasoningEffort: 'off', maxTokens: 1500, temperature: 0.1 },
       version: '',
     }
     var stateListeners = new Set()
@@ -329,8 +329,8 @@ window.__ModuleLoader__.load({
           return postJson(SETTINGS_URL, { reset: true }).then(function (d) {
             applyRemoteState(d)
             setParamsMsg(L(
-              '已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.3）',
-              'Restored default parameters (reasoning off / maxTokens 1500 / temperature 0.3)'))
+              '已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1）',
+              'Restored default parameters (reasoning off / maxTokens 1500 / temperature 0.1)'))
             return d
           })
         }, setParamsMsg, setParamsErr)
@@ -374,8 +374,8 @@ window.__ModuleLoader__.load({
             L('下面的参数与指令已经按“效果最明显、速度最快”调好，开箱即用，不需要你手动设置。',
               'The parameters and instruction below are already tuned for the clearest result at the fastest speed. No setup needed.')),
           h('div', { style: { opacity: 0.8 } },
-            L('推荐参数：思考强度 off / 最大输出 1500 / 温度 0.3 —— 不修改这三项时效果最快也最稳定。',
-              'Recommended values: reasoning off / max output 1500 / temperature 0.3 — leaving these three untouched is both the fastest and the most stable.')),
+            L('推荐参数：思考强度 off / 最大输出 1500 / 温度 0.1 —— 不修改这三项时效果最快也最稳定。',
+              'Recommended values: reasoning off / max output 1500 / temperature 0.1 — leaving these three untouched is both the fastest and the most stable.')),
           h('div', {},
             L('改坏了怎么办：生成参数区点「恢复默认」、优化指令区点「恢复默认指令」，即可回到这套推荐值。',
               'If you change something and dislike it, the “Reset to default” buttons in each section restore exactly these values.'))),
