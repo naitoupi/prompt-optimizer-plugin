@@ -238,13 +238,7 @@ window.__ModuleLoader__.load({
             setPromptText(d.prompt)
             setPromptDraft(d.prompt)
             setPromptIsCustom(d.isCustom === true)
-            if (d.replacedEarlierBuiltin === true) {
-              // 提交的是旧版内置文案：Host 未存为自定义，已回落到当前内置版
-              setPromptMsg(L('这是旧版内置指令：已自动改用当前内置版本（未存为自定义指令）',
-                'That was an earlier built-in instruction: the current built-in version was restored instead of saving it as custom'))
-            } else {
-              setPromptMsg(L('优化指令已保存并即时生效', 'Instruction saved and applied instantly'))
-            }
+            setPromptMsg(L('优化指令已保存并即时生效', 'Instruction saved and applied instantly'))
             return d
           })
         }, setPromptMsg, setPromptErr)

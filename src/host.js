@@ -119,6 +119,7 @@ function normalizePrompt(value) {
   return value
 }
 
+
 /** 内置优化指令模板（双语默认版；规则一致，语言随界面）。设置页「恢复默认指令」回到本版。 */
 const SYSTEM_PROMPT_EN = [
   'You are a prompt engineer. The user gives you a draft prompt; you return a clearer, more specific, directly usable prompt.',
@@ -173,29 +174,6 @@ function promptFingerprint(value) {
   return String(value || '').replace(/\r\n/g, '\n').trim()
 }
 
-/**
- * 识别“这段文本像不像内置指令”，用于判断用户保存的到底是自定义指令，还是
- * **旧版内置文案**。
- *
- * 为什么需要：用户把设置页跨版本一直开着，点“保存指令”时提交的是**旧版内置文案**。
- * 只比对当前内置版会把它当成自定义指令存下，用户就被静默钉死在旧指令上，新版规则
- * （如占位符边界）随之失效。
- *
- * 做法是不写死历史全文，而是看结构：工作步骤 3 条 + 要求 8 条是否齐全、开头是否
- * 仍是“提示词工程师”的角色句。内置文案以后怎么改，这些锚点都还在，因此无需维护
- * 历史版本清单。
- */
-function looksLikeBuiltinPrompt(value) {
-  const t = promptFingerprint(value)
-  if (t === SYSTEM_PROMPT_ZH || t === SYSTEM_PROMPT_EN) return true
-  // “要求：” / “Rules:” 独占一行是内置指令的结构标志：足以把它们与用户自己写的
-  // 编号清单区分开，又不会因为某次改了规则数量而失效。
-  const hasRulesHeading = t.split('\n').some((line) => /^\s*(?:要求|Rules)\s*[:：]?\s*$/.test(line))
-  const numberedLines = (t.match(/^\s*\d\)\s/gm) || []).length
-  return hasRulesHeading
-    && numberedLines >= 11
-    && /提示词工程师|prompt engineer/i.test(t)
-}
 
 /** 按请求语言（'en' | 'zh'）选择提示文案。 */
 function pick(lang, zh, en) {
@@ -645,19 +623,12 @@ export function apply(ctx, config) {
           }
           const next = normalizePrompt(payload.prompt)
           if (next === null) throw new Error(pick(lang, '指令内容不能为空（最多 32 KiB）', 'The instruction must not be empty (max 32 KiB)'))
-          if (looksLikeBuiltinPrompt(next)) {
-            // 与当前内置版相同，或与某个历届内置版结构一致 → 视为未自定义：清掉覆盖，
-            // 回落到当前内置版。只比对当前内置版是不够的：跨版本一直开着的设置页会提交
-            // 旧版内置文案，那样会被当成自定义指令存下，用户就被静默钉死在旧指令上。
-            const wasEarlier = !isBuiltinPrompt(next)
+          if (isBuiltinPrompt(next)) {
+            // 与当前内置默认完全相同 → 视为未自定义：清掉覆盖，回到“默认版”。
+            // 其余一律按用户的自定义指令原样保存：用户点了保存就是用户的意思。
             delete state.prompt
             saveState(enabledOf(), effectiveOf(), state.prompt)
-            sendJson(res, 200, {
-              ok: true,
-              prompt: promptOf(lang),
-              isCustom: false,
-              ...(wasEarlier ? { replacedEarlierBuiltin: true } : {}),
-            })
+            sendJson(res, 200, { ok: true, prompt: promptOf(lang), isCustom: false })
             return
           }
           state.prompt = next
