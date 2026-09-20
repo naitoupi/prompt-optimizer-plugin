@@ -1,8 +1,8 @@
 {
   "name": "prompt-optimizer-plugin",
-  "version": "0.11.5",
+  "version": "0.12.0",
   "private": true,
-  "description": "DeepSeek Harness (DSH) plugin: ✨ optimize the composer draft with the current model. Installable bundle (dsh.bundle + dsh.client); Settings tab controls on/off, generation params, and an editable system prompt with reset-to-default.",
+  "description": "DeepSeek Harness (DSH) plugin: a ✨ button next to the composer that rewrites your draft into a clearer, more specific prompt using your current model.",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
@@ -40,7 +40,7 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-settings-plugins"
+        "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
   }

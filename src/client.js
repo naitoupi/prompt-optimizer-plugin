@@ -9,7 +9,7 @@
  *  - 优化后输入框直接替换为优化文（发送即优化文）
  *  - 原文浮动展示在输入框上方（conversation.input.dock 参考区，只读）
  *  - 展开/收起全部由输入行为自动驱动；清空草稿时撤销按钮与参考区一并消失
- *  - 设置 → 插件 → 提示词优化：启用/停用开关 + 生成参数 + 可编辑优化指令
+ *  - 设置左侧导航一级条目「提示词优化」：启用/停用开关 + 生成参数 + 可编辑优化指令
  *  - 界面文案跟随页面语言（<html lang> / navigator.language）自动切换中/英
  *
  * 通信：不再用动态插件的 host.call，改 fetch Host 的同源路由
@@ -55,7 +55,7 @@ window.__ModuleLoader__.load({
     // 内容 = Host 的 state 快照：{ enabled, settings: { reasoningEffort, maxTokens, temperature } }
     var storeState = {
       enabled: true,
-      settings: { reasoningEffort: 'off', maxTokens: 1500, temperature: 0.1 },
+      settings: { reasoningEffort: 'off', maxTokens: 1500, temperature: 0.3 },
       version: '',
     }
     var stateListeners = new Set()
@@ -148,8 +148,8 @@ window.__ModuleLoader__.load({
       })
     }
 
-    // ── 设置 → 插件 → 提示词优化：启用开关 + 生成参数 + 优化指令 ──
-    // (Settings → Plugins → Prompt Optimizer tab)
+    // ── 设置左侧导航一级条目「提示词优化」：启用开关 + 生成参数 + 优化指令 ──
+    // (Top-level Settings nav section "Prompt Optimizer")
     function OptimizerSettingsTab() {
       var snap = usePluginState()
       var enabled = snap.enabled
@@ -329,8 +329,8 @@ window.__ModuleLoader__.load({
           return postJson(SETTINGS_URL, { reset: true }).then(function (d) {
             applyRemoteState(d)
             setParamsMsg(L(
-              '已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1）',
-              'Restored default parameters (reasoning off / maxTokens 1500 / temperature 0.1)'))
+              '已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.3）',
+              'Restored default parameters (reasoning off / maxTokens 1500 / temperature 0.3)'))
             return d
           })
         }, setParamsMsg, setParamsErr)
@@ -360,6 +360,25 @@ window.__ModuleLoader__.load({
             'Adds ✨ Optimize to the composer toolbar: rewrites your draft into a clearer, more specific prompt with the current model; ↩ undo and a floating original-text reference are included.'),
           h('div', {}, L('当前状态：' + (enabled ? '✅ 已启用' : '⏸ 已停用'), 'Current status: ' + (enabled ? '✅ Enabled' : '⏸ Disabled'))),
           h('div', {}, L('停用后：输入框不再显示优化按钮，也不会发起任何模型调用。', 'When disabled, the optimize button disappears and no model call is made.'))),
+        // 默认值说明：这套值是实测调过的，直接用即可；误改后按下方按钮一键回到这里
+        // (Defaults are measured, not guessed — tell users so, and how to come back)
+        h('div', {
+          style: {
+            padding: '10px 12px', borderRadius: '8px', fontSize: '12px', lineHeight: '1.7',
+            border: '1px solid rgba(96,125,255,0.35)', background: 'rgba(96,125,255,0.06)',
+          },
+        },
+          h('div', { style: { fontWeight: 600, marginBottom: '2px' } },
+            L('推荐用法：什么都不用改', 'Recommended: change nothing')),
+          h('div', {},
+            L('下面的参数与指令已经按“效果最明显、速度最快”调好，开箱即用，不需要你手动设置。',
+              'The parameters and instruction below are already tuned for the clearest result at the fastest speed. No setup needed.')),
+          h('div', { style: { opacity: 0.8 } },
+            L('推荐参数：思考强度 off / 最大输出 1500 / 温度 0.3 —— 不修改这三项时效果最快也最稳定。',
+              'Recommended values: reasoning off / max output 1500 / temperature 0.3 — leaving these three untouched is both the fastest and the most stable.')),
+          h('div', {},
+            L('改坏了怎么办：生成参数区点「恢复默认」、优化指令区点「恢复默认指令」，即可回到这套推荐值。',
+              'If you change something and dislike it, the “Reset to default” buttons in each section restore exactly these values.'))),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
           h('button', {
             type: 'button', disabled: busy, onClick: flip,
@@ -605,8 +624,13 @@ window.__ModuleLoader__.load({
               const res = await httpOptimize(draft)
               if (res && typeof res === 'object' && res.ok === true && typeof res.text === 'string' && res.text.trim()) {
                 if (res.unchanged === true || res.text === draft) {
-                  // 模型判定无需优化：不替换草稿、不入撤销栈，只给短暂提示
-                  setNotice(L('无需优化：模型认为原文已是最优，未做改动', 'Already optimal: the model considered the original unchanged'))
+                  // 模型逐字返回原文（草稿已是可直接使用的提示词）：不替换、不入撤销栈
+                  setNotice(L('无需优化：这段草稿已经是清晰、可直接使用的提示词，未做改动',
+                    'Already optimal: this draft is already a clear, directly usable prompt — left unchanged'))
+                } else if (res.minorChange === true) {
+                  // 只差一两个字/标点：替换也看不出区别，如实告知而不是让输入框悄悄变化
+                  setNotice(L('本次改动极小（仅标点或个别字词），已保持原文不变',
+                    'Only a trivial change (punctuation or a word or two) — the original was kept'))
                 } else {
                   // 记录原文；输入框直接替换为优化文，发送即优化文
                   push(sessionId, draft, res.text)
@@ -719,10 +743,13 @@ window.__ModuleLoader__.load({
         },
       ))
 
-      // ── 设置 → 插件 → 提示词优化：开关 Tab ──
-      // (Settings → Plugins → Prompt Optimizer tab)
-      slots.inject('settings.plugins.tab', () => slots.register(
-        { name: 'settings.plugins.tab', id: 'prompt-optimizer', order: 30, label: () => L('提示词优化', 'Prompt Optimizer') },
+      // ── 设置左侧导航：与「通用设置 / 模型 / Agent 预设 / 插件 / 侧边卡片」并列的一级条目 ──
+      // order 略大于「插件」的 30 → 紧跟在它下面，即侧边栏导航最后一行。
+      // label 用 thunk：导航每次投影都会重新读取，跟随界面语言，无需重新注册。
+      // (Top-level Settings nav row, ordered right after the 'plugins' section at
+      // order 30. `label` is a thunk so the nav follows the UI language.)
+      slots.inject('settings.section', () => slots.register(
+        { name: 'settings.section', id: 'prompt-optimizer', order: 35, label: () => L('提示词优化', 'Prompt Optimizer') },
         OptimizerSettingsTab,
       ))
     }

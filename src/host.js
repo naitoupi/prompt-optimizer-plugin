@@ -15,7 +15,7 @@
  *
  * 版本：v8 — v7 语义不变，新增“启用/停用”开关（方案 B，免重启）：
  * 状态持久化在 <dsh-home>/prompt-optimizer-state.json，可在
- * 设置 → 插件 → 提示词优化 Tab 切换；停用时 ✨ 关闭、不再调用模型。
+ * 设置 → 提示词优化 切换；停用时 ✨ 关闭、不再调用模型。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -121,39 +121,37 @@ function normalizePrompt(value) {
 
 /** 内置优化指令模板（双语默认版；规则一致，语言随界面）。设置页「恢复默认指令」回到本版。 */
 const SYSTEM_PROMPT_EN = [
-  'You are a professional prompt-optimization expert.',
-  'You will be given an original prompt. Rewrite it into a clearer, more specific, and more effective prompt.',
-  'Requirements:',
-  '1) Preserve every point of the original meaning; do not lose information;',
-  '2) Make the instructions clearer and the goals more specific WITHOUT reordering the meaning: keep the subject, object, and modifier relationship of every sentence exactly as in the original; use lists, steps, or other structured formats only when they do not disturb that relationship;',
-  '3) Add necessary constraints, output format, or context when needed;',
-  '4) Output only the optimized prompt text itself—no explanations, prefaces, afterwords, or code fences;',
-  '5) Use the same language as the original text;',
-  '6) Only rewrite when there is real room for improvement: if the original is already a clear, specific, actionable prompt with nothing substantive to fix, return it verbatim; do not change things just for the sake of changing;',
-  '7) If the original is not a prompt task (for example ordinary prose or casual content that cannot be improved), return it verbatim; do not invent instructions or content;',
-  '8) Minimize changes: fix only genuine unclarity, incompleteness, or vagueness; keep the user\'s wording, structure, and intent; avoid pointless rewording;',
-  '9) For identical input, keep the output stable; do not keep switching phrasing or structure;',
-  '10) NEVER change grammatical roles or semantic relations: keep the subject and object of every action, all modifiers, negations, and clause order exactly as they are. Never swap, merge, or reorder sentence components just to sound smoother, and never add a negation or change a quantity;',
-  '11) Before rewriting, identify who does what to whom in the original; after rewriting, verify that every action still has the same actor and the same target as the original; if the wording was already clear and correct, return it verbatim instead of paraphrasing;',
-  '12) Never output empty content or replies like “cannot optimize/no content”—returning the original verbatim is a valid “no change” result.',
+  'You are a prompt engineer. The user gives you a draft prompt; you return a clearer, more specific, directly usable prompt.',
+  'Workflow:',
+  '1) Read the draft and identify its core intent—what the user actually wants done. This intent is the anchor and must never change.',
+  '2) Diagnose which of these elements are missing or vague, and add back only those: A) the task itself; B) input, i.e. what content or file the task works on; C) output, i.e. the expected format, scope, or acceptance criteria; D) constraints, i.e. language, tools, version, length, or limits; E) context, i.e. background the task depends on.',
+  '3) Rewrite the draft into a complete, well-organized, directly usable prompt.',
+  'Rules:',
+  '1) Preserve all of the original meaning and every stated requirement; never delete, weaken, or contradict anything.',
+  '2) Supplement only what is genuinely missing; never invent requirements the original does not imply, and never fabricate a value. For identical input, keep the output stable.',
+  '3) Keep the language of the original, and output only the rewritten prompt itself—no explanations, prefaces, afterwords, or code fences.',
+  '4) NEVER change grammatical roles or semantic relations: keep the subject and object of every action, all modifiers, negations, and clause order exactly as they are. Never swap, merge, or reorder sentence components just to sound smoother, and never add a negation or change a quantity.',
+  '5) Restructure or reword only where the meaning stays intact; where you cannot expand with certainty, keep the original wording.',
+  '6) When the draft mentions specific input (a file, code, data, or an attachment) but gives no details, state that input as the task\'s input in the rewritten prompt instead of asking a question. Where a necessary value truly cannot be inferred, mark it with <angle brackets>; never fabricate it.',
+  '7) If the draft carries no task at all (a bare greeting, a fragment, or idle chat that asks for nothing), return the draft text itself unchanged. Never reply to the draft, never answer it, and never treat it as a message addressed to you.',
+  '8) The rewritten prompt must never be shorter than the original and must never summarize or compress it; but never state the same requirement or fact twice—each requirement appears once. Keep the information complete by filling in missing elements, not by restating what is already there. Never output empty content or replies like “cannot optimize”.',
 ].join('\n')
 
 const SYSTEM_PROMPT_ZH = [
-  '你是一位专业的提示词（Prompt）优化专家。',
-  '用户会给你一段原始提示词输入，请把它改写成一个更清晰、更具体、更有效的提示词。',
+  '你是一位提示词工程师。用户给你一段草稿提示词，你把它改写得更清晰、更具体、可以直接拿来用。',
+  '工作方式：',
+  '1) 先读懂草稿的核心意图——用户到底想做什么。这个意图是锚点，任何情况下都不得改变。',
+  '2) 再判断下面这些要素里，哪些是缺失或含糊的，只把缺的补上：A) 任务本身；B) 输入，即基于什么内容或文件来做；C) 输出，即期望的形式、范围或验收标准；D) 约束，即语言、工具、版本、长度或限制；E) 上下文，即任务依赖的背景信息。',
+  '3) 然后把草稿改写成一段完整、有条理、可直接使用的提示词。',
   '要求：',
-  '1) 完整保留原意的所有要点，不丢失信息；',
-  '2) 让指令更明确、目标更具体，但不得重排语义——每句话的主语、宾语、修饰关系必须与原文完全一致；只有在不扰乱该关系的前提下才可使用列表、分步骤等结构化表达；',
-  '3) 如果需要，补充必要的约束、输出格式或上下文信息；',
-  '4) 直接输出优化后的提示词正文本身，不要任何解释、前言、后记或代码块围栏；',
-  '5) 使用与原文相同的语言；',
-  '6) 只在确有改进空间时改写：如果原文已经是明确、具体、可执行、无需实质改进的提示词，直接逐字原样输出原文，不要为改而改；',
-  '7) 如果原文不是提示词任务（例如一段普通陈述、闲聊或无法优化的内容），同样原样输出原文，不要凭空编造指令或内容；',
-  '8) 最小化改动：仅修正真正不清楚、不完整或不具体之处，保留用户的措辞、结构与意图，避免无意义的措辞替换；',
-  '9) 相同输入下请保持输出稳定，不要反复更换说法或结构；',
-  '10) 绝不改变语法角色或语义关系：每个动作的主语和宾语、所有修饰语、否定词以及子句顺序都必须原样保持；禁止为了“更顺口”而调换、合并或重排句子成分，禁止新增否定词或改动数量；',
-  '11) 改写前先理清原文“谁对谁做了什么”；改写后核对每个动作的执行者与对象是否与原文一致；若原文已清晰正确，直接逐字返回而不是改写；',
-  '12) 严禁输出空内容或“无法优化/没有内容”之类的话——原样输出原文是合法的“无改动”结果。',
+  '1) 完整保留原意与原文已经提出的每一项要求，不得删减、弱化或与原文矛盾；',
+  '2) 只补充确实缺失的要素，不得编造原文没有提出的要求，也不得编造具体取值；相同输入下保持输出稳定；',
+  '3) 使用与原文相同的语言，并只输出改写后的提示词正文，不要任何解释、前言、后记或代码块围栏；',
+  '4) 绝不改变语法角色或语义关系：每个动作的主语和宾语、所有修饰语、否定词以及子句顺序都必须原样保持；禁止为了“更顺口”而调换、合并或重排句子成分，禁止新增否定词或改动数量；',
+  '5) 只在不改变原意的前提下调整结构或措辞；没有把握展开的地方，保留原文的说法；',
+  '6) 草稿提到具体输入（某个文件、代码、数据或附件）却没说细节时，在改写里把它写成任务的输入，而不是反过来提问；确实无法从草稿推断的必要取值，用 <尖括号> 标出，绝不编造；',
+  '7) 如果草稿本身不含任何任务（例如一句问候、一个片段、没有提出任何要求的闲聊），原样返回草稿本身；不要回应草稿、不要回答它，也不要把它当成对你说的消息；',
+  '8) 改写后的提示词不得比原文更短，不得概括或压缩原文；但也不要把同一个要求或同一件事重复说两遍——每项要求只出现一次，用补全缺失要素的方式而不是重复叙述来保证信息不丢失；严禁输出空内容或“无法优化”之类的话。',
 ].join('\n')
 
 /** 语言对应的内置默认指令。 */
@@ -268,13 +266,56 @@ async function streamOnce(llm, selection, text, maxTokens, temperature, reasonin
 const DEFAULTS = Object.freeze({
   reasoningEffort: 'off',   // 提示词改写不需要深度推理：off 最快且不会耗尽额度
   maxTokens: 1500,          // 关掉思考后足够覆盖一次高质量改写
-  temperature: 0.1,         // 低温 → 结果更稳定、可复现；想要更“有创意”再调高
+  temperature: 0.3,         // 改写任务而非抽取任务：0.1 会让模型倾向照抄原文
+  minorChangeRatio: 0.95,   // 相似度 ≥ 该值视为“几乎没改”，见 diffLevel
 })
 
-/** 归一化空白后比较，判断模型是否实质上未改动原文（避免“硬优化”）。 */
-function essentiallySame(optimized, text) {
+/** 归一化后的 Levenshtein 编辑距离（两行滚动数组，O(min) 空间）。 */
+function editDistance(a, b) {
+  if (a === b) return 0
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+  // 让内层循环走较短的一侧，减少数组访问
+  let prev = new Array(b.length + 1)
+  let curr = new Array(b.length + 1)
+  for (let j = 0; j <= b.length; j++) prev[j] = j
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i
+    const ca = a.charCodeAt(i - 1)
+    for (let j = 1; j <= b.length; j++) {
+      const cost = ca === b.charCodeAt(j - 1) ? 0 : 1
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+    }
+    const swap = prev
+    prev = curr
+    curr = swap
+  }
+  return prev[b.length]
+}
+
+/**
+ * 相似度 = 1 − 编辑距离 / 较长文本长度（按字符计，CJK 与拉丁文本通用）。
+ * 用于区分“真改写”与“只删一个字/只改标点”这类伪改动。
+ */
+function similarity(a, b) {
+  const longer = Math.max(a.length, b.length)
+  if (longer === 0) return 1
+  return 1 - editDistance(a, b) / longer
+}
+
+/**
+ * 判定模型是否几乎没改：逐字相同，或相似度达到阈值。
+ * 返回值区分两种情况——“逐字未改”用于 unchanged 提示；“几乎没改”用于提醒
+ * 用户这次优化幅度极小，而不是让输入框发生看不出区别的变化。
+ */
+function diffLevel(optimized, text, minorChangeRatio) {
   const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim()
-  return norm(optimized) === norm(text)
+  const a = norm(optimized)
+  const b = norm(text)
+  if (a === b) return 'identical'
+  const threshold = typeof minorChangeRatio === 'number' && minorChangeRatio > 0 && minorChangeRatio <= 1
+    ? minorChangeRatio : DEFAULTS.minorChangeRatio
+  return similarity(a, b) >= threshold ? 'minor' : 'changed'
 }
 
 /**
@@ -311,6 +352,8 @@ async function resolveReasoningEffort(llm, selection, requested) {
  * 核心优化逻辑：用选中模型改写文本。
  * 用可配置的推理强度/额度/温度执行；遇 finish=max-tokens 空返回时自动扩容
  * 重试一次；最终失败按真实 finish 原因给出可操作提示。
+ * 返回三种成功形态：真改写 { text }、几乎没改 { text, minorChange: true }、
+ * 逐字未改 { unchanged: true }——由客户端分别呈现。
  */
 async function runOptimize(ctx, text, opts, systemPrompt, lang) {
   const llm = ctx.get('llm')
@@ -338,10 +381,14 @@ async function runOptimize(ctx, text, opts, systemPrompt, lang) {
       const r = await streamOnce(llm, selection, text, attempt.maxTokens, temperature, reasoningEffort, systemPrompt)
       const optimized = r.out.trim()
       if (optimized) {
-        // 模型判断“无需优化”时会把原文原样返回：标记 unchanged，让客户端
-        // 提示用户而不是替换草稿（也避免撤销栈被“无改动”污染）。
-        if (essentiallySame(optimized, text)) {
+        // 逐字未改用 unchanged；相似度达阈值（只删一个字/只改标点）用 minorChange：
+        // 两者都不替换草稿，避免撤销栈被“看不出区别”的改动污染。
+        const level = diffLevel(optimized, text, opts.minorChangeRatio)
+        if (level === 'identical') {
           return { ok: true, text: text, unchanged: true }
+        }
+        if (level === 'minor') {
+          return { ok: true, text: optimized, minorChange: true }
         }
         return { ok: true, text: optimized }
       }
@@ -406,7 +453,10 @@ function resolveConfig(config) {
     ? cfg.maxTokens : DEFAULTS.maxTokens
   const temperature = typeof cfg.temperature === 'number' && cfg.temperature >= 0 && cfg.temperature <= 2
     ? cfg.temperature : DEFAULTS.temperature
-  return { reasoningEffort, maxTokens, temperature }
+  const minorChangeRatio = typeof cfg.minorChangeRatio === 'number'
+    && cfg.minorChangeRatio > 0 && cfg.minorChangeRatio <= 1
+    ? cfg.minorChangeRatio : DEFAULTS.minorChangeRatio
+  return { reasoningEffort, maxTokens, temperature, minorChangeRatio }
 }
 
 export function apply(ctx, config) {
@@ -415,10 +465,12 @@ export function apply(ctx, config) {
   const state = loadState()
   const enabledOf = () => state.enabled === false ? false : true
   // 生效参数 = UI 保存值（优先）→ 行 config → DEFAULTS
+  // minorChangeRatio 只能来自行 config（UI 不暴露），决定“几乎没改”的判定阈值
   const effectiveOf = () => ({
     reasoningEffort: state.reasoningEffort !== undefined ? state.reasoningEffort : rowOpts.reasoningEffort,
     maxTokens: state.maxTokens !== undefined ? state.maxTokens : rowOpts.maxTokens,
     temperature: state.temperature !== undefined ? state.temperature : rowOpts.temperature,
+    minorChangeRatio: rowOpts.minorChangeRatio,
   })
   // 生效指令 = UI 自定义（优先）→ 对应界面语言的内置默认模板
   const promptOf = (lang) => state.prompt !== undefined ? state.prompt : builtinPromptOf(lang)
@@ -442,7 +494,7 @@ export function apply(ctx, config) {
           if (!enabledOf()) {
             sendJson(res, 200, {
               ok: false,
-              error: pick(lang, '插件已停用：请到 设置 → 插件 → 提示词优化 开启后再试', 'Plugin is disabled: enable it under Settings → Plugins → Prompt Optimizer first'),
+              error: pick(lang, '插件已停用：请到 设置 → 提示词优化 开启后再试', 'Plugin is disabled: enable it under Settings → Prompt Optimizer first'),
             })
             return
           }
@@ -471,7 +523,7 @@ export function apply(ctx, config) {
       },
     }))
 
-    // 写启用状态（免重启生效；供 设置 → 插件 → 提示词优化 的开关调用）
+    // 写启用状态（免重启生效；供 设置 → 提示词优化 的开关调用）
     disposers.push(server.register({
       kind: 'exact',
       path: SET_STATE_PATH,
