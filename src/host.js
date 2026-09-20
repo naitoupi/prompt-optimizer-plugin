@@ -268,6 +268,7 @@ const DEFAULTS = Object.freeze({
   maxTokens: 1500,          // 关掉思考后足够覆盖一次高质量改写
   temperature: 0.1,         // 同一输入重复优化应给出同一结果；改写力度由指令约束，不靠提高温度
   minorChangeRatio: 0.95,   // 相似度 ≥ 该值视为“几乎没改”，见 diffLevel
+  tidyLayout: true,         // 去掉非空行之间的空行，见 tidyLayoutText
 })
 
 /** 归一化后的 Levenshtein 编辑距离（两行滚动数组，O(min) 空间）。 */
@@ -316,6 +317,45 @@ function diffLevel(optimized, text, minorChangeRatio) {
   const threshold = typeof minorChangeRatio === 'number' && minorChangeRatio > 0 && minorChangeRatio <= 1
     ? minorChangeRatio : DEFAULTS.minorChangeRatio
   return similarity(a, b) >= threshold ? 'minor' : 'changed'
+}
+
+/**
+ * 排版整理：删掉两个非空行之间的空行，把“逐条要求各占一行、行间空行”压成紧凑的分段。
+ * 理由：英文界面语言走英文指令模板时，模型会输出“标签：内容 + 行间空行”的分段排版，
+ * 中文模板则偏单段——同一句草稿因界面语言不同得到两种排版，会让用户以为是格式异常。
+ *
+ * 保护性保留（这些位置的空行有意义，删了会破坏结构）：
+ *   - 代码围栏 ``` 内部或其相邻处；
+ *   - 列表项（- * + 1. 等）之前/之后；
+ *   - 连续多个空行（保留一个，用于表达段落分隔）。其余情况下的空行一律删除。
+ */
+function tidyLayoutText(value) {
+  const text = String(value || '').replace(/\r\n/g, '\n').trim()
+  const isFence = (s) => /^\s*(?:```|~~~)/.test(s)
+  const isListItem = (s) => /^\s*(?:[-*+]|\d+[.)])\s/.test(s)
+  // 只含空白字符的行按空行处理，并统一成真正的空串
+  const lines = text.split('\n').map((l) => (l.trim() === '' ? '' : l))
+  if (!lines.includes('')) return text
+  const out = []
+  let inFence = false
+  let prevWasBlank = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line !== '' || inFence) {
+      out.push(line)
+      prevWasBlank = false
+      if (isFence(line)) inFence = !inFence
+      continue
+    }
+    const prev = out.length > 0 ? out[out.length - 1] : ''
+    const next = lines[i + 1] !== undefined ? lines[i + 1] : ''
+    const protective = prevWasBlank // 段落分隔：连续空行只保留第一个
+      || isFence(prev) || isFence(next)
+      || isListItem(prev) || isListItem(next)
+    if (protective) out.push('')
+    prevWasBlank = true
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
 /**
@@ -381,16 +421,19 @@ async function runOptimize(ctx, text, opts, systemPrompt, lang) {
       const r = await streamOnce(llm, selection, text, attempt.maxTokens, temperature, reasoningEffort, systemPrompt)
       const optimized = r.out.trim()
       if (optimized) {
+        // 排版整理后再判定：整理想删的是空行，不影响 diffLevel（其内部先归一化空白）
+        const tidy = opts.tidyLayout === false ? optimized : tidyLayoutText(optimized)
+        const result = tidy === '' ? optimized : tidy
         // 逐字未改用 unchanged；相似度达阈值（只删一个字/只改标点）用 minorChange：
         // 两者都不替换草稿，避免撤销栈被“看不出区别”的改动污染。
-        const level = diffLevel(optimized, text, opts.minorChangeRatio)
+        const level = diffLevel(result, text, opts.minorChangeRatio)
         if (level === 'identical') {
           return { ok: true, text: text, unchanged: true }
         }
         if (level === 'minor') {
-          return { ok: true, text: optimized, minorChange: true }
+          return { ok: true, text: result, minorChange: true }
         }
-        return { ok: true, text: optimized }
+        return { ok: true, text: result }
       }
       if (r.finishKind === 'error' || r.finishKind === 'aborted') {
         const fail = r.finishFailure
@@ -456,7 +499,8 @@ function resolveConfig(config) {
   const minorChangeRatio = typeof cfg.minorChangeRatio === 'number'
     && cfg.minorChangeRatio > 0 && cfg.minorChangeRatio <= 1
     ? cfg.minorChangeRatio : DEFAULTS.minorChangeRatio
-  return { reasoningEffort, maxTokens, temperature, minorChangeRatio }
+  const tidyLayout = cfg.tidyLayout === undefined ? DEFAULTS.tidyLayout : cfg.tidyLayout !== false
+  return { reasoningEffort, maxTokens, temperature, minorChangeRatio, tidyLayout }
 }
 
 export function apply(ctx, config) {
@@ -465,12 +509,13 @@ export function apply(ctx, config) {
   const state = loadState()
   const enabledOf = () => state.enabled === false ? false : true
   // 生效参数 = UI 保存值（优先）→ 行 config → DEFAULTS
-  // minorChangeRatio 只能来自行 config（UI 不暴露），决定“几乎没改”的判定阈值
+  // minorChangeRatio / tidyLayout 只能来自行 config（UI 不暴露）
   const effectiveOf = () => ({
     reasoningEffort: state.reasoningEffort !== undefined ? state.reasoningEffort : rowOpts.reasoningEffort,
     maxTokens: state.maxTokens !== undefined ? state.maxTokens : rowOpts.maxTokens,
     temperature: state.temperature !== undefined ? state.temperature : rowOpts.temperature,
     minorChangeRatio: rowOpts.minorChangeRatio,
+    tidyLayout: rowOpts.tidyLayout,
   })
   // 生效指令 = UI 自定义（优先）→ 对应界面语言的内置默认模板
   const promptOf = (lang) => state.prompt !== undefined ? state.prompt : builtinPromptOf(lang)

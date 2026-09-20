@@ -48,6 +48,12 @@ D)约束 E)上下文 里缺哪些 → 只补缺的**。保留的三条硬约束�
 “几乎没改”的判定在 Host 侧：`diffLevel()` 用归一化 Levenshtein 相似度，阈值 0.95
 （`minorChangeRatio`，仅可由 profile patch 覆盖），相似度低于阈值才算真改写。
 
+**排版差异与整理（v0.12.2）**：中文指令模板倾向输出单段，英文模板倾向输出
+“任务/输入/输出/约束/上下文”逐行分段 + 行间空行。于是同一句草稿只因为界面语言不同
+（客户端按 `<html lang>` 决定 `lang=zh|en`）就得到两种排版，容易被当成格式异常。
+`tidyLayoutText()` 因此删掉**两个非空行之间**的空行，把分段压紧；代码围栏内部、
+列表项前后、段落分隔用的空行一律保留。可用 `tidyLayout: false` 关闭。
+
 ## 包结构（installable bundle，无需构建步骤）
 
 ```
@@ -124,6 +130,7 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 | 版本 | 变更 |
 |------|------|
+| v0.12.2 | 排版整理：新增 `tidyLayoutText()`（`tidyLayout` 默认 true，仅可由 profile patch 关闭），删掉两个非空行之间的空行；代码围栏、列表项、段落分隔的空行保留。起因：英文界面语言走英文指令模板会输出"标签：内容 + 行间空行"分段，中文模板偏单段，同一句草稿因界面语言不同得到两种排版。附 11 项离线单元测试（含代码块/列表/CRLF/纯空白行保护与"非空行零丢失"断言） |
 | v0.12.1 | 稳定性修复：`temperature` 默认 0.3→0.1。链式/重复优化实测（同输入连跑 5 次得到 5 个不同结果，长度 113~175）表明 0.3 的方差过大；指令已强制"诊断缺项再补全"，低温不会再退化成照抄。链式收敛性与语义保持经 5 组实验验证（否定词/数量/模态零漂移，格式无 markdown 泄漏，中文 2~3 轮、英文 3 轮进入不动点） |
 | v0.12.0 | 合并 v0.11.6 + v0.11.7 为一次功能发布：**设置入口迁移**到左侧导航一级条目（见 v0.11.6 行）；**修复"点了优化和没点区别不大"**（见 v0.11.7 行）；补回"无任务草稿原样返回"规则（修 v0.11.7 重写时引入的回归：`hello` 曾被改写成一句回应）；规则 8 补"每项要求只出现一次"（修同义反复）；设置页新增「推荐用法：什么都不用改」说明卡，写明推荐默认值与两个恢复默认按钮的去处；README 精简 |
 | v0.11.7 | 修复"点了优化和没点区别不大"：内置指令重写（删除 5 条"逐字返回/最小化改动"逃生条款，改为"读懂意图 → 诊断 A~E 缺项 → 只补缺的"正向任务，新增"不得比原文更短"防信息丢失）；`temperature` 默认 0.1→0.3（0.1 使模型倾向照抄）；新增 `minorChangeRatio`（默认 0.95）+ `diffLevel()`/`editDistance()`：只删一个字或改标点这类伪改动不再替换草稿，客户端按 `minorChange` 如实提示 |
@@ -174,10 +181,11 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
     maxTokens: 2048
     temperature: 0.2
     minorChangeRatio: 0.95 # 0~1，越小越严格；仅此处可配
+    tidyLayout: true       # 去掉非空行之间的空行；仅此处可配
 ```
 
 参数优先级：**UI 保存值 > profile patch config > 内置默认**（UI 点“恢复默认”可回到后两者；
-`minorChangeRatio` 不在 UI 暴露，只由 profile patch 或内置默认决定）。
+`minorChangeRatio` 与 `tidyLayout` 不在 UI 暴露，只由 profile patch 或内置默认决定）。
 
 ## 开发与调试
 
@@ -197,6 +205,8 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 - 改 `src/host.js` 或 `src/client.js` 后：`dsh plugin --profile web add ./prompt-optimizer-plugin` 重装一次
   （link 安装下即更新链接目标），然后重启 `dsh web`。
+- 回归测试：`node tests/tidy-layout.test.mjs`（11 项，含代码块/列表/CRLF/纯空白行保护与"非空行零丢失"断言）。
+  该测试直接从 `src/host.js` 抽取 `tidyLayoutText` 函数体执行，测的是真实实现而非副本。
 - Host 路由可直测：`curl -X POST http://127.0.0.1:3080/plugins/prompt-optimizer-plugin/optimize -H 'content-type: application/json' -d '{"text":"帮我写个函数"}'`
 - 浏览器端日志可在 DevTools 里看 `window.__ModuleLoader__` 装载与 fetch 调用。
 - `src/host.js` 侧改动**必须重启 `dsh web`**（Host 模块常驻内存）；`src/client.js` 改动刷新页面即可。
