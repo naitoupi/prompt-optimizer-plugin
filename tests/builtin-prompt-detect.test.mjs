@@ -106,5 +106,15 @@ check('removed from client.js: replacedEarlierBuiltin', client.includes('replace
 check('client opens the editor on the current text', client.includes('function loadPromptOnce()'), true)
 
 console.log('')
+console.log('--- the custom instruction is one slot shared by both languages ---')
+// lang only selects which built-in the fallback uses; a saved override is
+// language-independent, so both reads return it (verified end-to-end too).
+const handler = src.slice(src.indexOf('// 优化指令：GET 读当前生效指令'), src.indexOf('// 更新生成参数'))
+check('GET serves the override regardless of lang', handler.includes('promptOf(lang)'), true)
+check('only the current built-in clears the override', handler.includes('if (isBuiltinPrompt(next)) {'), true)
+check('the override is cleared somewhere (reset or built-in text)', handler.includes('delete state.prompt'), true)
+check('reset is accepted', handler.includes('payload.reset === true'), true)
+
+console.log('')
 console.log(`${passed} passed, ${failed} failed`)
 process.exitCode = failed === 0 ? 0 : 1
