@@ -195,22 +195,29 @@ window.__ModuleLoader__.load({
       var copyMsg = copyPair[0]
       var setCopyMsg = copyPair[1]
 
+      // 每次展开编辑器都重新拉取当前生效指令：内置指令会随插件升级变化，缓存旧文本
+      // 会让用户看到过期内容，甚至把旧版内置文案当成"自定义"存回去。
+      // 刷新的是"基准文本 + 是否自定义"；若用户已改动草稿（草稿 ≠ 基准文本），
+      // 则保留草稿，避免折叠再展开丢掉正在编辑的内容。
+      // (Re-fetch on every expand: the built-in instruction changes across plugin
+      // upgrades, and a cached copy could be saved back as a stale "custom" prompt.
+      // The refresh updates the baseline text and the custom flag, but keeps an
+      // edited draft so collapsing and re-expanding never discards the user's work.)
       function loadPromptOnce() {
-        if (promptText !== null) return
         // 带语言标记读取：中文界面读中文默认模板，英文界面读英文模板
-        fetch(PROMPT_URL + '?lang=' + uiLang()).then(function (res) { return res.json() }).then(function (d) {
+        return fetch(PROMPT_URL + '?lang=' + uiLang()).then(function (res) { return res.json() }).then(function (d) {
           if (d !== null && typeof d === 'object' && d.ok === true && typeof d.prompt === 'string') {
+            var unchangedDraft = promptDraft === '' || promptDraft === promptText
             setPromptText(d.prompt)
-            setPromptDraft(d.prompt)
             setPromptIsCustom(d.isCustom === true)
+            if (unchangedDraft) setPromptDraft(d.prompt)
           } else {
             setPromptText('')
-            setPromptDraft('')
             setPromptIsCustom(false)
+            if (promptDraft === '' || promptDraft === promptText) setPromptDraft('')
           }
         }).catch(function () {
-          setPromptText('')
-          setPromptDraft('')
+          // 拉取失败：保留已有内容，不清空用户草稿
         })
       }
 
@@ -231,7 +238,13 @@ window.__ModuleLoader__.load({
             setPromptText(d.prompt)
             setPromptDraft(d.prompt)
             setPromptIsCustom(d.isCustom === true)
-            setPromptMsg(L('优化指令已保存并即时生效', 'Instruction saved and applied instantly'))
+            if (d.replacedEarlierBuiltin === true) {
+              // 提交的是旧版内置文案：Host 未存为自定义，已回落到当前内置版
+              setPromptMsg(L('这是旧版内置指令：已自动改用当前内置版本（未存为自定义指令）',
+                'That was an earlier built-in instruction: the current built-in version was restored instead of saving it as custom'))
+            } else {
+              setPromptMsg(L('优化指令已保存并即时生效', 'Instruction saved and applied instantly'))
+            }
             return d
           })
         }, setPromptMsg, setPromptErr)
