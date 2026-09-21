@@ -1,8 +1,8 @@
 {
   "name": "prompt-optimizer-plugin",
-  "version": "0.12.5",
+  "version": "0.13.0",
   "private": true,
-  "description": "DeepSeek Harness (DSH) plugin: a ✨ button next to the composer that rewrites your draft into a clearer, more specific prompt using your current model.",
+  "description": "DeepSeek Harness (DSH) plugin: a ✨ button next to the composer that rewrites your draft into a clearer, more specific prompt using your current model — and reads the current session's context first, so references like “this” or “continue” resolve against the work in progress.",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",

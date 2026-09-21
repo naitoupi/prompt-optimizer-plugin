@@ -1,6 +1,11 @@
 /**
- * Prompt Optimizer — Client half（可安装 dsh bundle 形态，v11，双语）
+ * 提示词优化助手 —— Client 半侧（可安装 dsh bundle 形态，v0.13.0，双语）
  * ================================================================
+ * v0.13.0（本机自有分支）：✨ 优化会把当前会话 sessionId 一并交给 Host，
+ * 由 Host 读取会话上下文后再改写；优化完成后如实提示本次参考了多少上下文。
+ * 设置页新增「会话上下文」开关与字符上限。
+ * (Local fork: the toolbar hands sessionId to the Host so it can read the session
+ * context before rewriting, and reports how much context was used.)
  * 由 dsh-client-modules 作为浏览器插件加载：包 manifest 声明 dsh.client 并
  * export ./client，页面通过 /plugins/prompt-optimizer-plugin/client.js 获取。
  *
@@ -55,7 +60,11 @@ window.__ModuleLoader__.load({
     // 内容 = Host 的 state 快照：{ enabled, settings: { reasoningEffort, maxTokens, temperature } }
     var storeState = {
       enabled: true,
-      settings: { reasoningEffort: 'off', maxTokens: 1500, temperature: 0.1 },
+      settings: {
+        reasoningEffort: 'off', maxTokens: 1500, temperature: 0.1,
+        // 会话上下文（v0.13.0）：默认开启，上限 4000 字符
+        useContext: true, contextMaxChars: 4000,
+      },
       version: '',
     }
     var stateListeners = new Set()
@@ -74,6 +83,8 @@ window.__ModuleLoader__.load({
           ? effort : storeState.settings.reasoningEffort,
         maxTokens: Number.isFinite(settings.maxTokens) ? settings.maxTokens : storeState.settings.maxTokens,
         temperature: typeof settings.temperature === 'number' ? settings.temperature : storeState.settings.temperature,
+        useContext: typeof settings.useContext === 'boolean' ? settings.useContext : storeState.settings.useContext,
+        contextMaxChars: Number.isFinite(settings.contextMaxChars) ? settings.contextMaxChars : storeState.settings.contextMaxChars,
       }
       storeState = {
         enabled: typeof d.enabled === 'boolean' ? d.enabled : storeState.enabled,
@@ -131,11 +142,13 @@ window.__ModuleLoader__.load({
      * 调用 Host 优化端点。业务失败（ok:false）仍以 HTTP 200 应答并带 error
      * 字段；HTTP/网络错误在此抛出。返回 { ok: true, text } | { ok: false, error }。
      */
-    function httpOptimize(text) {
+    // sessionId 必须交给 Host：只有 Host 进程拿得到真实 Session 对象与会话上下文
+    // (Hand sessionId to the Host — only the Host process can reach the live Session)
+    function httpOptimize(text, sessionId) {
       return fetch(OPTIMIZE_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text, lang: uiLang() }),
+        body: JSON.stringify(sessionId ? { text, sessionId, lang: uiLang() } : { text, lang: uiLang() }),
       }).then(async (res) => {
         var data = null
         try { data = await res.json() } catch (e) { data = null }
@@ -279,12 +292,22 @@ window.__ModuleLoader__.load({
       var tempPair = React.useState(String(settings.temperature))
       var tempStr = tempPair[0]
       var setTempStr = tempPair[1]
+      // 会话上下文：开关 + 字符上限（随远端值同步）
+      // (Session context: toggle + character budget, synced from the Host snapshot)
+      var ctxOnPair = React.useState(settings.useContext !== false)
+      var ctxOn = ctxOnPair[0]
+      var setCtxOn = ctxOnPair[1]
+      var ctxCharsPair = React.useState(String(settings.contextMaxChars))
+      var ctxCharsStr = ctxCharsPair[0]
+      var setCtxCharsStr = ctxCharsPair[1]
       // 远端值变化（保存/恢复默认/其他页面操作）时同步本地草稿
       React.useEffect(function () {
         setEffort(settings.reasoningEffort)
         setTokensStr(String(settings.maxTokens))
         setTempStr(String(settings.temperature))
-      }, [settings.reasoningEffort, settings.maxTokens, settings.temperature])
+        setCtxOn(settings.useContext !== false)
+        setCtxCharsStr(String(settings.contextMaxChars))
+      }, [settings.reasoningEffort, settings.maxTokens, settings.temperature, settings.useContext, settings.contextMaxChars])
 
       function runTask(task, setM, setE) {
         setBusy(true)
@@ -314,6 +337,7 @@ window.__ModuleLoader__.load({
       function saveSettings() {
         var tokens = parseInt(tokensStr, 10)
         var temp = parseFloat(tempStr)
+        var ctxChars = parseInt(ctxCharsStr, 10)
         if (!Number.isFinite(tokens) || tokens < 64) {
           setParamsErr(L('最大输出 tokens 需为 ≥64 的整数', 'Max output tokens must be an integer ≥ 64'))
           return
@@ -322,8 +346,15 @@ window.__ModuleLoader__.load({
           setParamsErr(L('温度需在 0 ~ 2 之间', 'Temperature must be between 0 and 2'))
           return
         }
+        if (!Number.isFinite(ctxChars) || ctxChars < 400 || ctxChars > 20000) {
+          setParamsErr(L('上下文上限需为 400 ~ 20000 之间的整数', 'Context budget must be an integer between 400 and 20000'))
+          return
+        }
         return runTask(function () {
-          return postJson(SETTINGS_URL, { reasoningEffort: effort, maxTokens: tokens, temperature: temp }).then(function (d) {
+          return postJson(SETTINGS_URL, {
+            reasoningEffort: effort, maxTokens: tokens, temperature: temp,
+            useContext: ctxOn, contextMaxChars: ctxChars,
+          }).then(function (d) {
             applyRemoteState(d)
             setParamsMsg(L('生成参数已保存并立即生效', 'Generation parameters saved and applied instantly'))
             return d
@@ -336,8 +367,8 @@ window.__ModuleLoader__.load({
           return postJson(SETTINGS_URL, { reset: true }).then(function (d) {
             applyRemoteState(d)
             setParamsMsg(L(
-              '已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1）',
-              'Restored default parameters (reasoning off / maxTokens 1500 / temperature 0.1)'))
+              '已恢复默认参数（关闭思考 off / maxTokens 1500 / 温度 0.1 / 参考会话上下文开启、上限 4000 字符）',
+              'Restored default parameters (reasoning off / maxTokens 1500 / temperature 0.1 / session context on, budget 4000 characters)'))
             return d
           })
         }, setParamsMsg, setParamsErr)
@@ -436,6 +467,28 @@ window.__ModuleLoader__.load({
             }),
             h('span', { style: fieldHint }, L('越低越稳定可复现（默认 0.1）；想要更多样化可调高。', 'Lower is more stable and reproducible (default 0.1); raise it for more variety.')),
           ),
+          // 会话上下文（v0.13.0）：改写前先读主人的上下文，用于消解草稿里的指代；可关、可限长
+          h('div', {
+            style: { borderTop: '1px solid rgba(128,128,128,0.2)', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' },
+          },
+            h('div', { style: { fontWeight: 600, fontSize: '12px' } },
+              L('会话上下文（改写前先读你的上下文）', 'Session context (read before rewriting)')),
+            h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' } },
+              h('input', { type: 'checkbox', checked: ctxOn, onChange: function (e) { setCtxOn(e.target.checked) } }),
+              L('参考会话上下文', 'Use session context')),
+            h('span', { style: fieldHint },
+              L('开启后，点 ✨ 会先把当前会话最近的「你 / AI」正文，连同会话主题与工作目录交给模型，用来把草稿里“这个 / 它 / 继续”指代的对象写清楚；只取正文文本，不含工具调用、工具结果与图片。关掉即退回只改草稿。',
+                'When on, clicking ✨ first hands the model the recent user/assistant prose plus the session topic and working directory, so references like “this”, “it”, or “continue” resolve to the real thing. Only prose text is used — no tool calls, tool results, or images. Turning it off rewrites the draft alone.')),
+            h('label', { style: fieldLabel }, L('上下文长度上限（字符）', 'Context budget (characters)')),
+            h('input', {
+              type: 'number', min: 400, max: 20000, step: 200, value: ctxCharsStr,
+              onChange: function (e) { setCtxCharsStr(e.target.value) },
+              style: inputStyle,
+            }),
+            h('span', { style: fieldHint },
+              L('默认 4000；放不下时从最早的消息开始丢弃。调大更懂上下文，但也更慢、更费额度。',
+                'Default 4000; the oldest messages are dropped first when it does not fit. Larger understands more context but is slower and costs more.')),
+          ),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginTop: '2px' } },
             h('button', {
               type: 'button', disabled: busy, onClick: saveSettings,
@@ -533,10 +586,16 @@ window.__ModuleLoader__.load({
         const s = historyBySession.get(sessionId)
         return s && s.length ? s[s.length - 1] : null
       }
-      const push = (sessionId, original, optimized) => {
+      // 第 4 个参数保存"这次参考了多少上下文"，随历史条目一起留存在模块级 Map 里：
+      // 工具行的灰色提示必然几秒淡出、且栏位很窄放不下长句，而原文参考区会一直显示到
+      // 草稿被清空/发送为止 —— 因此把上下文信息挂在条目上，主人随时能看到；
+      // 又因为 Map 在模块作用域，组件重挂载（重渲染）也不会把它弄丢。
+      // (The 4th argument keeps the context summary with the history entry. The module-level
+      // Map outlives any component remount, while the narrow toolbar hint always fades.)
+      const push = (sessionId, original, optimized, contextSummary) => {
         let s = historyBySession.get(sessionId)
         if (!s) { s = []; historyBySession.set(sessionId, s) }
-        s.push({ original, optimized })
+        s.push({ original, optimized, contextSummary })
         notify(sessionId)
       }
       const pop = (sessionId) => {
@@ -594,10 +653,14 @@ window.__ModuleLoader__.load({
             if (!sessionId) return undefined
             return subscribe(sessionId, () => setUndoable(hasHistory(sessionId)))
           }, [sessionId])
-          // 普通提示（如“已是最优，未改动”）几秒后自动消失
+          // 普通提示（如“已是最优，未改动”）几秒后自动消失。
+          // 6 秒而非 3.2 秒：优化成功后主人的注意力在输入框上，句子还没读完就淡出会被
+          // 误认为"没提示"。工具行仍会消失，但完整信息已常驻在下方原文参考区。
+          // (Six seconds instead of 3.2: after a successful optimize the user's eyes are on
+          // the composer, and the full detail stays in the reference dock below anyway.)
           React.useEffect(() => {
             if (!notice) return undefined
-            const timer = setTimeout(() => setNotice(null), 3200)
+            const timer = setTimeout(() => setNotice(null), 6000)
             return () => clearTimeout(timer)
           }, [notice])
           // 发送（phase 离开 plain）→ 清掉上次失败留下的红字/提示
@@ -628,20 +691,36 @@ window.__ModuleLoader__.load({
             setErr(null)
             setNotice(null)
             try {
-              const res = await httpOptimize(draft)
+              const res = await httpOptimize(draft, sessionId)
+              // 如实告知本次参考了多少上下文（Host 只回标量，界面不做二次推断）
+              // (Report exactly how much context was used; the Host returns scalars only)
+              const cu = res && typeof res === 'object' && res.contextUsed ? res.contextUsed : null
+              // 工具行只放短提示：它必然淡出，且 maxWidth 很窄，长句会换行顶高工具栏
+              // (The toolbar gets a short hint only: it always fades and it is narrow.)
+              const ctxInfo = cu === null
+                ? ''
+                : (cu.used === true
+                    ? L(' · 上下文 ' + cu.messages + ' 条', ' · context: ' + cu.messages)
+                    : L(' · 无可用上下文', ' · no context'))
+              // 常驻参考区用的标量摘要，随历史条目一起保存（只存数字与布尔）
+              // (Scalar summary kept with the history entry for the persistent dock.)
+              const ctxSummary = cu !== null && cu.used === true
+                ? { messages: cu.messages, dropped: cu.dropped, chars: cu.chars, truncated: cu.truncated }
+                : null
               if (res && typeof res === 'object' && res.ok === true && typeof res.text === 'string' && res.text.trim()) {
                 if (res.unchanged === true || res.text === draft) {
                   // 模型逐字返回原文（草稿已是可直接使用的提示词）：不替换、不入撤销栈
                   setNotice(L('无需优化：这段草稿已经是清晰、可直接使用的提示词，未做改动',
-                    'Already optimal: this draft is already a clear, directly usable prompt — left unchanged'))
+                    'Already optimal: this draft is already a clear, directly usable prompt — left unchanged') + ctxInfo)
                 } else if (res.minorChange === true) {
                   // 只差一两个字/标点：替换也看不出区别，如实告知而不是让输入框悄悄变化
                   setNotice(L('本次改动极小（仅标点或个别字词），已保持原文不变',
-                    'Only a trivial change (punctuation or a word or two) — the original was kept'))
+                    'Only a trivial change (punctuation or a word or two) — the original was kept') + ctxInfo)
                 } else {
                   // 记录原文；输入框直接替换为优化文，发送即优化文
-                  push(sessionId, draft, res.text)
+                  push(sessionId, draft, res.text, ctxSummary)
                   inputActions.setDraft(res.text)
+                  setNotice(L('已优化并替换输入框', 'Optimized — the draft was replaced') + ctxInfo)
                 }
               } else {
                 setErr((res && res.error) || L('优化失败', 'Optimization failed'))
@@ -745,6 +824,22 @@ window.__ModuleLoader__.load({
                 L('📋 原文（优化前的输入框内容，仅作参考，不会随消息发送）',
                   '📋 Original (your text before optimizing; reference only — never sent with the message)')),
             ),
+            // 上下文用量常驻于此（不随工具行提示淡出而消失）：只要参考区还在，主人就能核对
+            // "这次到底读了我的什么、读了多少"。
+            // (Persistent context usage: as long as this dock is visible the user can check
+            // exactly what was read and how much — it does not fade with the toolbar hint.)
+            entry.contextSummary
+              ? h('div', {
+                  key: 'ctx',
+                  style: { fontSize: '11px', lineHeight: '1.55', opacity: 0.85 },
+                }, L(
+                  '🧠 已参考上下文：' + entry.contextSummary.messages + ' 条历史（共 ' + entry.contextSummary.chars + ' 字符'
+                    + (entry.contextSummary.dropped > 0 ? '，较早的 ' + entry.contextSummary.dropped + ' 条未带入' : '')
+                    + (entry.contextSummary.truncated ? '，超长部分已截断' : '') + '）',
+                  '🧠 Context used: ' + entry.contextSummary.messages + ' messages (' + entry.contextSummary.chars + ' chars'
+                    + (entry.contextSummary.dropped > 0 ? ', ' + entry.contextSummary.dropped + ' older dropped' : '')
+                    + (entry.contextSummary.truncated ? ', long parts truncated' : '') + ')'))
+              : null,
             h('div', { key: 'body', style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '1.5', opacity: 0.75 } }, entry.original),
           )
         },

@@ -93,6 +93,55 @@ D)约束 E)上下文 里缺哪些 → 只补缺的**。保留的三条硬约束�
 改内置文案后请顺手确认：`GET /prompt` 返回的是新文本、`isCustom=false`、编辑器展开时
 显示的是新文本、「恢复默认指令」拿到的也是新版本。
 
+## 会话上下文（v0.13.0）
+
+点 ✨ 时先读**当前会话**的上下文，用来消解草稿里的指代与省略（“这个 / 它 / 继续”），
+再基于上下文改写。上下文是**增强项**：拿不到就退回纯草稿改写（载荷与 v0.12.5 **逐字一致**），
+不报错、不空转。
+
+**读什么**（Host 侧惰性 `ctx.get()`，实现见 `buildContextBrief()`）：
+
+| 来源 | 取法 | 说明 |
+|---|---|---|
+| 对话正文 | `ctx.sessions.get(sessionId).deriveMessages()` 的 `user` / `assistant` **text 块** | 默认最近 12 条、合计 4000 字符、单条 900 字符（超出按头部截断并标 `…（已截断）`） |
+| 会话主题 | `ctx.sessionTitle.get(session).title` | 一行 |
+| 工作目录 | `session.header.cwd` | 一行 |
+| Agent 预设 | `session.header.agentPreset` | 一行 |
+
+**刻意不读** —— 两条取舍都来自对真实会话的实测，不是想当然：
+
+- **工具结果远比人话多**：同一场真实会话实测 `user:tool-result` **133 条**、`assistant:tool-call`
+  38 条、`assistant:reasoning` 23 条，而 `user:text` **只有 5 条**、`assistant:text` 18 条。
+  不按块类型筛选，上下文会被工具输出淹没。故只取正文 text 块。
+- **DSH 会把 `<system-reminder>…</system-reminder>`（技能清单等）当作 `user` 消息注入**，
+  它不是用户说的话。实测该会话 `deriveMessages()` 的**最后一条 user 正文正是技能清单**——
+  不过滤（`stripInjectedBlocks()`）就会把系统提醒当成“最近需求”。
+- `system` 消息（工作区指令 / 上下文快照）、图片与附件同样不取。
+
+**预算与顺序**：工作区信息先算，它占用的字符从总预算里扣除（正文至少保留 200 字符）；
+对话**从最近往回取**，放不下就丢弃更早的消息——宁可少给一条，也不把某条截成半句话。
+
+**接线**：客户端把插槽标准 props 里的 `sessionId` 随草稿一起 POST（`{ text, sessionId, lang }`）；
+响应新增只含标量的 `contextUsed`（`{ used, messages, dropped, chars, truncated, title, cwd }`），
+界面据此如实提示用量，Host 不回传任何会话对象本身。
+
+**界面显示（v0.13.1）**：工具行只留短提示（6 秒淡出），**完整用量随撤销栈条目常驻**在
+「📋 原文」参考区（`push(sessionId, original, optimized, contextSummary)`）——参考区显示到
+草稿被清空 / 发送 / 撤销为止；历史栈是**模块作用域**，组件重挂载也丢不掉。
+v0.13.0 曾把长句塞进 300px 宽的工具行、3.2 秒淡出，用户反映“还没看清就没了”。
+
+**指令侧**：内置模板新增「如果消息里带有【会话上下文】」五条（中英各一套）：只用它消解指代与
+补足背景、不得整段照抄、不得据此新增用户没提过的要求、草稿与上下文冲突时以草稿为准、
+上下文不是任务（不得回应它）；并允许“草稿本身没有任务、但上下文能确定意图”时把任务补写成
+完整提示词（否则按规则 7 原样返回）。
+
+**降级**（任一情况返回 `null` → 纯草稿改写）：总开关关闭、会话 id 缺失、`sessions` 服务不可用、
+会话不在内存里、`deriveMessages()` 抛错、整条流检索不到任何正文。
+
+**验证**：`node tests/context.test.mjs`（46 项）——注入块过滤、块类型筛选、预算/条数上限、
+超长截断、中英标签、标题缺失，6 条降级路径，以及“无上下文时载荷与旧版逐字一致”的回归断言。
+函数经 `src/host.js` 的测试专用出口 `__internals` 导入（Loader 只读 `name`/`inject`/`apply`）。
+
 ## 包结构（installable bundle，无需构建步骤）
 
 ```
@@ -161,7 +210,8 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 ## 依赖的 DSH 能力
 
-- Host：`ctx.get('webServer').register`、`ctx.get('llm').stream`、`ctx.get('agentDefaultModel').currentSelection`
+- Host：`ctx.get('webServer').register`、`ctx.get('llm').stream`、`ctx.get('agentDefaultModel').currentSelection`、
+  `ctx.get('sessions').get(id).deriveMessages()`、`ctx.get('sessionTitle').get(session).title`
 - Client：`slots` 插槽 `conversation.input.right`（工具行按钮）、`conversation.input.dock`（参考区）、
   `useInput`（draft/phase）、`inputActions.setDraft`、同源 `fetch`
 
@@ -169,6 +219,7 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 
 | 版本 | 变更 |
 |------|------|
+| v0.13.0 | **改写前先读会话上下文**：`buildContextBrief()` 取 `ctx.sessions.get(id).deriveMessages()` 的 user/assistant **正文 text 块**（默认最近 12 条 / 合计 4000 字符 / 单条 900 字符）+ 会话主题、工作目录、Agent 预设，作为背景交给模型，用于消解草稿里的指代与省略（“这个 / 它 / 继续”）。两条取舍来自实测：①工具结果远多于人话（同一会话 `user:tool-result` 133 条 vs `user:text` 仅 5 条）→ 必须按块类型筛选；②DSH 把 `<system-reminder>`（技能清单）当 `user` 消息注入 → 不过滤会把系统提醒当成“最近需求”。读不到上下文（含 6 条降级路径）时退回纯草稿改写，载荷与 v0.12.5 逐字一致。设置页新增「会话上下文」开关与长度上限（`useContext` / `contextMaxChars`，默认开 / 4000）。新增单测 46 项。v0.13.1 修正显示：用量信息由“工具行 3.2 秒淡出”改为**随撤销栈常驻「📋 原文」参考区**，工具行只留短提示（6 秒） |
 | v0.12.5 | 简化指令编辑契约：**用户保存什么就存什么，插件不干预**。删除 v0.12.4 加的整套推测机制（4 段历届内置文案常量、`LEGACY_BUILTIN_PROMPTS`、`isBuiltinLikePrompt`、`replacedEarlierBuiltin` 响应与对应提示），host.js 从 724 行回到 681 行。依据：v0.12.4 两版推测都失败——第一版只比对当前版本（太窄），第二版结构判据太松、把用户自己改过的指令也判成旧版内置（实测 6/6 真实编辑被丢弃）。过期文本问题已在源头解决（编辑器每次展开都重新拉取），不需要服务端猜测。测试重写为 23 项，含"任何用户文本都不得被特殊对待"与"推测机制不得复活"断言 |
 | v0.12.4 | 修掉"旧版内置指令被存成自定义"的坑：设置页跨版本一直开着时，点「保存指令」提交的是**旧版内置文案**，而 `isBuiltinPrompt()` 只认识当前版本，于是它被当成自定义指令存下，用户被静默钉死在旧指令上、新版规则全部失效（实测复现）。修法是客户端每次展开编辑器都重新拉取（保留未保存草稿），不再缓存可能过期的文本 |
 | v0.12.3 | 指令优化（规则 6 加边界）：短草稿会被填入过多"可选项追问"占位符——实测"帮我写个二分查找"（8 字）产出 176 字、**7 个尖括号**，"帮我写周报"（5 字）产出 116 字（膨胀 22~23 倍）。规则 6 补充两条边界：每个占位符只标一件具体的事、不得把无关要求拼在一起；不要为"完整"逐条枚举可能情况，只标真正影响结果的关键信息。A/B 实测占位符 22→15（−32%）、总长 710→490 字（−31%）且结构质量无损。**注意**：同一轮测试中"最多三个占位符"的硬性数量上限被否决——它会把不相关要素塞进同一括号（"数组及目标值，或语言及版本"），或塌成"输出形式与验收标准：<期望的输出形式与验收标准>"这类废话 |
@@ -209,6 +260,11 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
 `maxTokens: 1500`、`temperature: 0.1`（同一输入重复优化应给出同一结果；改写力度由指令约束，不靠提高温度）、
 `minorChangeRatio: 0.95`（相似度达到该值即视为“几乎没改”，见上文行为约定）。
 
+会话上下文（v0.13.0）：`useContext: true`（总开关）、`contextMaxChars: 4000`（含工作区信息的
+总字符上限，合法区间 400~20000）、`contextMaxMessages: 12`（最多携带的历史消息条数，1~40）、
+`contextPerMessageChars: 900`（单条消息上限，超出按头部截断）。前两项在设置页可改，
+后两项只走 profile patch / 内置默认。
+
 **优先在设置页调整**（设置 → 提示词优化，UI 保存后立即生效并持久化）。
 
 如需“开箱默认值”（例如给所有 profile / 部署方下发默认参数），也可以在
@@ -224,10 +280,15 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
     temperature: 0.2
     minorChangeRatio: 0.95 # 0~1，越小越严格；仅此处可配
     tidyLayout: true       # 去掉非空行之间的空行；仅此处可配
+    useContext: true       # 是否读会话上下文；设置页也可改
+    contextMaxChars: 4000  # 上下文总字符上限（400~20000）；设置页也可改
+    contextMaxMessages: 12 # 最多携带的历史消息条数（1~40）；仅此处可配
+    contextPerMessageChars: 900 # 单条消息字符上限（≥120）；仅此处可配
 ```
 
 参数优先级：**UI 保存值 > profile patch config > 内置默认**（UI 点“恢复默认”可回到后两者；
-`minorChangeRatio` 与 `tidyLayout` 不在 UI 暴露，只由 profile patch 或内置默认决定）。
+`minorChangeRatio`、`tidyLayout`、`contextMaxMessages`、`contextPerMessageChars` 不在 UI 暴露，
+只由 profile patch 或内置默认决定）。
 
 ## 开发与调试
 
@@ -249,6 +310,14 @@ dsh --profile web --dump-config   # 应出现 "# == prompt-optimizer-plugin" 层
   （link 安装下即更新链接目标），然后重启 `dsh web`。
 - 回归测试：`node tests/tidy-layout.test.mjs`（11 项，含代码块/列表/CRLF/纯空白行保护与"非空行零丢失"断言）。
   该测试直接从 `src/host.js` 抽取 `tidyLayoutText` 函数体执行，测的是真实实现而非副本。
+- 会话上下文回归测试：`node tests/context.test.mjs`（46 项，注入块过滤 / 块类型筛选 / 预算与条数上限 /
+  超长截断 / 中英标签 / 标题缺失 / 6 条降级路径 / “无上下文时载荷逐字一致”）。
+  该测试经 `src/host.js` 的 `__internals` 出口导入真实实现，用假的 `sessions`/`sessionTitle` 驱动。
 - Host 路由可直测：`curl -X POST http://127.0.0.1:3080/plugins/prompt-optimizer-plugin/optimize -H 'content-type: application/json' -d '{"text":"帮我写个函数"}'`
 - 浏览器端日志可在 DevTools 里看 `window.__ModuleLoader__` 装载与 fetch 调用。
-- `src/host.js` 侧改动**必须重启 `dsh web`**（Host 模块常驻内存）；`src/client.js` 改动刷新页面即可。
+- `src/host.js` 侧改动**必须重启 `dsh web`**（Host 模块常驻内存，无热重载）。
+- `src/client.js` 侧改动**不需要重启**：web profile 默认挂载 `@deepseek-ai/dsh-client-hmr`，
+  它以 500ms 间隔 stat 轮询每个客户端产物的 `mtimeMs`/`size`，变更即
+  `clientModules.rebuilt(id)` 重算 rev，并经 `/plugins/events` SSE 帧推给浏览器半侧完成重载
+  （`rebuilt()` 是“产物内容变更进入图”的唯一入口；无 watcher 时页面只会拿到激活时的快照字节）。
+  手改 `src/client.js` 后通常连刷新都不用；若没生效，刷新一次页面即可。
